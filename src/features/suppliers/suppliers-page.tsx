@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef, OnChangeFn, SortingState, Updater } from "@tanstack/react-table";
 import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
 import { useCallback, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import * as XLSX from "xlsx";
@@ -19,7 +20,7 @@ import { FormField } from "@/components/shared/form-field";
 import { PageHeader } from "@/components/shared/page-header";
 import { SlideOverPanel } from "@/components/shared/slide-over-panel";
 import { StatusBadge } from "@/components/shared/status-badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -406,7 +407,12 @@ export function SuppliersPage() {
       <PageHeader
         title="Suppliers"
         subtitle="Manage your vendor directory."
-        actions={writable ? <Button onClick={() => setPanelOpen(true)}>New supplier</Button> : null}
+        actions={
+          <div className="flex gap-2">
+            <Link href="/suppliers/performance" className={buttonVariants({ variant: "secondary" })}>Performance</Link>
+            {writable ? <Button onClick={() => setPanelOpen(true)}>New supplier</Button> : null}
+          </div>
+        }
       />
 
       <FilterBar>
@@ -569,6 +575,11 @@ export function SuppliersPage() {
     </div>
   );
 }
+
+
+
+
+
 
 
 
