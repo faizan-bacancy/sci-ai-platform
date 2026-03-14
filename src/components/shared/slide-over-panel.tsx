@@ -15,11 +15,11 @@ export function SlideOverPanel({
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full sm:max-w-xl">
+      <SheetContent className="w-full p-0 sm:max-w-xl">
         <SheetHeader>
           <SheetTitle>{title}</SheetTitle>
         </SheetHeader>
-        <div className="mt-6">{children}</div>
+        <div className="flex-1 overflow-y-auto px-4 pb-6">{children}</div>
       </SheetContent>
     </Sheet>
   );

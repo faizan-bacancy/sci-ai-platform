@@ -350,8 +350,14 @@ export function PurchaseOrdersPage() {
           }}
         >
           <SelectTrigger className="w-full sm:w-64">
-            <SelectValue placeholder="Supplier" />
-          </SelectTrigger>
+  <SelectValue placeholder="Supplier">
+    {(() => {
+      if (!supplier || supplier === "all") return "All suppliers";
+      const selected = (supplierOptions ?? []).find((s) => s.id === supplier);
+      return selected?.company_name ?? "All suppliers";
+    })()}
+  </SelectValue>
+</SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All suppliers</SelectItem>
             {(supplierOptions ?? []).map((s) => (
@@ -437,8 +443,15 @@ export function PurchaseOrdersPage() {
                 onValueChange={(v) => form.setValue("supplier_id", v ?? "")}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select supplier" />
-                </SelectTrigger>
+  <SelectValue placeholder="Select supplier">
+    {(() => {
+      const value = form.watch("supplier_id");
+      if (!value) return "Select supplier";
+      const selected = (supplierOptions ?? []).find((s) => s.id === value);
+      return selected?.company_name ?? "Select supplier";
+    })()}
+  </SelectValue>
+</SelectTrigger>
                 <SelectContent>
                   {(supplierOptions ?? []).map((s) => (
                     <SelectItem key={s.id} value={s.id}>
@@ -458,8 +471,15 @@ export function PurchaseOrdersPage() {
                 onValueChange={(v) => form.setValue("warehouse_id", v ?? "")}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select warehouse" />
-                </SelectTrigger>
+  <SelectValue placeholder="Select warehouse">
+    {(() => {
+      const value = form.watch("warehouse_id");
+      if (!value) return "Select warehouse";
+      const selected = (warehouseOptions ?? []).find((w) => w.id === value);
+      return selected?.name ?? "Select warehouse";
+    })()}
+  </SelectValue>
+</SelectTrigger>
                 <SelectContent>
                   {(warehouseOptions ?? []).map((w) => (
                     <SelectItem key={w.id} value={w.id}>
@@ -509,53 +529,62 @@ export function PurchaseOrdersPage() {
 
               return (
                 <div key={field.id} className="space-y-3 rounded-md border p-3">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    <FormField
-                      label="Product"
-                      error={form.formState.errors.lines?.[index]?.product_id?.message}
-                    >
-                      <Select
-                        value={selectedProductId}
-                        onValueChange={(v) => {
-                          form.setValue(productIdPath, v ?? "");
-                          const opt = (productOptions ?? []).find((p) => p.id === (v ?? ""));
-                          if (opt) {
-                            const current = form.getValues(unitCostPath);
-                            if (!current || Number(current) === 0) {
-                              form.setValue(unitCostPath, opt.unit_cost);
-                            }
-                          }
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select product" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {(productOptions ?? []).map((p) => (
-                            <SelectItem key={p.id} value={p.id}>
-                              {p.name} ({p.sku})
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </FormField>
+                  <div className="space-y-3">
+  <FormField
+    label="Product"
+    error={form.formState.errors.lines?.[index]?.product_id?.message}
+  >
+    <Select
+      value={selectedProductId}
+      onValueChange={(v) => {
+        form.setValue(productIdPath, v ?? "");
+        const opt = (productOptions ?? []).find((p) => p.id === (v ?? ""));
+        if (opt) {
+          const current = form.getValues(unitCostPath);
+          if (!current || Number(current) === 0) {
+            form.setValue(unitCostPath, opt.unit_cost);
+          }
+        }
+      }}
+    >
+      <SelectTrigger className="w-full">
+        <SelectValue placeholder="Select product">
+          {(() => {
+            if (!selectedProductId) return "Select product";
+            const selected = (productOptions ?? []).find(
+              (p) => p.id === selectedProductId,
+            );
+            return selected ? `${selected.name} (${selected.sku})` : "Select product";
+          })()}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {(productOptions ?? []).map((p) => (
+          <SelectItem key={p.id} value={p.id}>
+            {p.name} ({p.sku})
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  </FormField>
 
-                    <FormField
-                      label="Qty"
-                      error={form.formState.errors.lines?.[index]?.qty_ordered?.message}
-                    >
-                      <Input type="number" step="0.001" {...form.register(qtyPath)} />
-                    </FormField>
+  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+    <FormField
+      label="Qty"
+      error={form.formState.errors.lines?.[index]?.qty_ordered?.message}
+    >
+      <Input type="number" step="0.001" {...form.register(qtyPath)} />
+    </FormField>
 
-                    <FormField
-                      label="Unit cost"
-                      error={form.formState.errors.lines?.[index]?.unit_cost?.message}
-                    >
-                      <Input type="number" step="0.01" {...form.register(unitCostPath)} />
-                    </FormField>
-                  </div>
-
-                  <div className="flex justify-end">
+    <FormField
+      label="Unit cost"
+      error={form.formState.errors.lines?.[index]?.unit_cost?.message}
+    >
+      <Input type="number" step="0.01" {...form.register(unitCostPath)} />
+    </FormField>
+  </div>
+</div>
+<div className="flex justify-end">
                     <Button
                       type="button"
                       variant="secondary"
@@ -602,3 +631,7 @@ export function PurchaseOrdersPage() {
     </div>
   );
 }
+
+
+
+

@@ -379,8 +379,14 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
                 <div className="flex w-full gap-2 sm:w-auto">
                   <Select value={addProductId} onValueChange={(v) => setAddProductId(v ?? "")}>
                     <SelectTrigger className="w-full sm:w-72">
-                      <SelectValue placeholder="Select product" />
-                    </SelectTrigger>
+  <SelectValue placeholder="Select product">
+    {(() => {
+      if (!addProductId) return "Select product";
+      const selected = (productsOptions ?? []).find((p) => p.id === addProductId);
+      return selected ? `${selected.name} (${selected.sku})` : "Select product";
+    })()}
+  </SelectValue>
+</SelectTrigger>
                     <SelectContent>
                       {(productsOptions ?? [])
                         .filter((p) => !linkedProductIds.has(p.id))
