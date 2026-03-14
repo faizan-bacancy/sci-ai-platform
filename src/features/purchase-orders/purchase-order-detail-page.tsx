@@ -225,10 +225,8 @@ export function PurchaseOrderDetailPage({ purchaseOrderId }: { purchaseOrderId: 
                     <TableCell>{Number(line.line_total).toFixed(2)}</TableCell>
                     <TableCell>
                       <DropdownMenu>
-                        <DropdownMenuTrigger>
-                          <Button variant="ghost" size="icon">
-                            <MoreHorizontal className="h-4 w-4" aria-hidden />
-                          </Button>
+                        <DropdownMenuTrigger className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent">
+                          <MoreHorizontal className="h-4 w-4" aria-hidden />
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => void handleExport([line])}>
@@ -262,5 +260,8 @@ export function PurchaseOrderDetailPage({ purchaseOrderId }: { purchaseOrderId: 
     </div>
   );
 }
+
+
+
 
 

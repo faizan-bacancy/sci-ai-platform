@@ -454,10 +454,8 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
                     </div>
                     <div className="flex items-center gap-2">
                       <DropdownMenu>
-                        <DropdownMenuTrigger>
-                          <Button variant="ghost" size="icon">
-                            <MoreHorizontal className="h-4 w-4" aria-hidden />
-                          </Button>
+                        <DropdownMenuTrigger className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent">
+                          <MoreHorizontal className="h-4 w-4" aria-hidden />
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => void handleExportLinks([link])}>
@@ -516,5 +514,8 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
     </div>
   );
 }
+
+
+
 
 

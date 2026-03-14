@@ -271,10 +271,8 @@ export function InventoryPage() {
         cell: ({ row }) => (
           <div onClick={(event) => event.stopPropagation()}>
             <DropdownMenu>
-              <DropdownMenuTrigger>
-                <Button variant="ghost" size="icon">
-                  <MoreHorizontal className="h-4 w-4" aria-hidden />
-                </Button>
+              <DropdownMenuTrigger className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent">
+                <MoreHorizontal className="h-4 w-4" aria-hidden />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => void handleExport([row.original])}>
@@ -434,4 +432,5 @@ export function InventoryPage() {
     </div>
   );
 }
+
 
