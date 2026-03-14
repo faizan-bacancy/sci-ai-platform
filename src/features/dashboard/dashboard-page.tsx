@@ -201,9 +201,9 @@ export function DashboardPage({ payload }: { payload: DashboardPayload }) {
               <div className="h-56">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={payload.spendTrend}>
-                    <XAxis dataKey="date" tickFormatter={formatDateLabel} stroke="hsl(var(--muted-foreground))" />
-                    <YAxis tickFormatter={(v) => `$${v}`} stroke="hsl(var(--muted-foreground))" />
-                    <Line type="monotone" dataKey="spend" stroke="hsl(var(--chart-1))" strokeWidth={2} dot={false} />
+                    <XAxis dataKey="date" tickFormatter={formatDateLabel} stroke="var(--muted-foreground)" />
+                    <YAxis tickFormatter={(v) => `$${v}`} stroke="var(--muted-foreground)" />
+                    <Line type="monotone" dataKey="spend" stroke="var(--chart-1)" strokeWidth={2} dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -227,9 +227,9 @@ export function DashboardPage({ payload }: { payload: DashboardPayload }) {
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={payload.riskDistribution}>
-                  <XAxis dataKey="status" stroke="hsl(var(--muted-foreground))" />
-                  <YAxis stroke="hsl(var(--muted-foreground))" />
-                  <Bar dataKey="count" fill="hsl(var(--chart-2))" radius={[6, 6, 0, 0]} />
+                  <XAxis dataKey="status" stroke="var(--muted-foreground)" />
+                  <YAxis stroke="var(--muted-foreground)" />
+                  <Bar dataKey="count" fill="var(--chart-2)" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -322,7 +322,7 @@ export function DashboardPage({ payload }: { payload: DashboardPayload }) {
                   <div>
                     <div className="text-sm font-medium">{item.summary}</div>
                     <div className="text-xs text-muted-foreground">
-                      {item.actor} · {item.entity} · {new Date(item.timestamp).toLocaleString()}
+                      {item.actor} · {item.entity} · <span suppressHydrationWarning>{new Date(item.timestamp).toLocaleString()}</span>
                     </div>
                   </div>
                   <Badge variant="outline" className="text-xs">{item.action}</Badge>

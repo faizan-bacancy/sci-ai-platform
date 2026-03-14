@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { getDashboardData } from "@/features/dashboard/dashboard-data";
 import { DashboardPage } from "@/features/dashboard/dashboard-page";
 

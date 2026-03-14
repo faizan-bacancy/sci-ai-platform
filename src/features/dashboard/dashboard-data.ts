@@ -173,7 +173,20 @@ export async function getDashboardData(input: {
     inventoryQuery = inventoryQuery.eq("warehouse_id", warehouseId);
   }
 
-  const { data: inventoryRowsData } = await inventoryQuery;
+  let { data: inventoryRowsData, error: inventoryError } = await inventoryQuery;
+
+  if (inventoryError) {
+    let fallbackQuery = supabase
+      .from("inventory")
+      .select("id,qty_on_hand,qty_reserved,warehouse_id,product:products(id,sku,name,unit_cost),warehouse:warehouses(id,name)");
+
+    if (warehouseId !== "all") {
+      fallbackQuery = fallbackQuery.eq("warehouse_id", warehouseId);
+    }
+
+    const fallback = await fallbackQuery;
+    inventoryRowsData = fallback.data ?? [];
+  }
   const inventoryRows = (inventoryRowsData ?? []) as unknown as InventoryRecord[];
 
   const dateStart = toIsoDate(startDateFromRange(rangeDays));
