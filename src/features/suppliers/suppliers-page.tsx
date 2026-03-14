@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef, OnChangeFn, SortingState, Updater } from "@tanstack/react-table";
 import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import * as XLSX from "xlsx";
@@ -201,7 +201,6 @@ export function SuppliersPage() {
 
   const sorting = useMemo<SortingState>(() => [{ id: sort, desc: dir === "desc" }], [sort, dir]);
   const params = { q, country, rating, active, page, sort, dir };
-  const exportParams = { q, country, rating, active, sort, dir };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["suppliers", params],
@@ -228,10 +227,10 @@ export function SuppliersPage() {
     },
   });
 
-  async function handleExport(rowsOverride?: SupplierRow[]) {
+  const handleExport = useCallback(async (rowsOverride?: SupplierRow[]) => {
     const exportData = rowsOverride
       ? { rows: rowsOverride, counts: data?.counts ?? {} }
-      : await fetchSuppliersForExport(exportParams);
+      : await fetchSuppliersForExport({ q, country, rating, active, sort, dir });
 
     const worksheet = buildWorksheet(exportData.rows, [
       { key: "company_name", header: "Company", type: "string", value: (row: SupplierRow) => row.company_name },
@@ -262,7 +261,7 @@ export function SuppliersPage() {
     });
 
     downloadWorkbook(workbook, `suppliers_export_${formatISODate(new Date())}.xlsx`);
-  }
+  }, [data?.counts, q, country, rating, active, sort, dir, profile.name]);
 
   const createMutation = useMutation({
     mutationFn: async (values: SupplierFormInput) => {
@@ -398,7 +397,7 @@ export function SuppliersPage() {
         ),
       },
     ];
-  }, [writable, toggleActiveMutation, data?.counts]);
+  }, [writable, toggleActiveMutation, data?.counts, handleExport]);
 
   const pageCount = Math.ceil((data?.count ?? 0) / PAGE_SIZE) || 1;
 
@@ -570,6 +569,9 @@ export function SuppliersPage() {
     </div>
   );
 }
+
+
+
 
 
 

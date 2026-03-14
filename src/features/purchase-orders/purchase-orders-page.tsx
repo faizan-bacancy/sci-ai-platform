@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
 import { useFieldArray, useForm } from "react-hook-form";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import { MoreHorizontal } from "lucide-react";
@@ -173,7 +173,6 @@ export function PurchaseOrdersPage() {
   const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1));
 
   const params = { q, supplier, status, from: fromDate, to: toDate, page };
-  const exportParams = { q, supplier, status, from: fromDate, to: toDate };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["purchase_orders", params],
@@ -202,8 +201,8 @@ export function PurchaseOrdersPage() {
 
   const { fields, append, remove } = useFieldArray({ control: form.control, name: "lines" });
 
-  async function handleExport(rowsOverride?: PurchaseOrderRow[]) {
-    const rows = rowsOverride ?? (await fetchPurchaseOrdersForExport(exportParams));
+  const handleExport = useCallback(async (rowsOverride?: PurchaseOrderRow[]) => {
+    const rows = rowsOverride ?? (await fetchPurchaseOrdersForExport({ q, supplier, status, from: fromDate, to: toDate }));
 
     const worksheet = buildWorksheet(rows, [
       { key: "po_number", header: "PO #", type: "string", value: (row: PurchaseOrderRow) => row.po_number },
@@ -245,7 +244,7 @@ export function PurchaseOrdersPage() {
     });
 
     downloadWorkbook(workbook, `purchase_orders_export_${formatISODate(new Date())}.xlsx`);
-  }
+  }, [q, supplier, status, fromDate, toDate, profile.name]);
 
   const createMutation = useMutation({
     mutationFn: async (values: PurchaseOrderCreateInput) => {
@@ -354,7 +353,7 @@ export function PurchaseOrdersPage() {
         ),
       },
     ];
-  }, []);
+  }, [handleExport]);
 
   const pageCount = Math.ceil((data?.count ?? 0) / PAGE_SIZE) || 1;
 
@@ -670,6 +669,9 @@ export function PurchaseOrdersPage() {
     </div>
   );
 }
+
+
+
 
 
 

@@ -12,7 +12,7 @@ import type {
   Updater,
 } from "@tanstack/react-table";
 import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import * as XLSX from "xlsx";
 import { MoreHorizontal } from "lucide-react";
@@ -225,7 +225,6 @@ export function ProductsPage() {
 
   const sorting = useMemo<SortingState>(() => [{ id: sort, desc: dir === "desc" }], [sort, dir]);
   const params = { q, category, active, page, sort, dir };
-  const exportParams = { q, category, active, sort, dir };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["products", params],
@@ -289,8 +288,8 @@ export function ProductsPage() {
     });
   }, [editingId, detailQuery.data, form]);
 
-  async function handleExport(rowsOverride?: ProductRow[]) {
-    const rows = rowsOverride ?? (await fetchProductsForExport(exportParams));
+  const handleExport = useCallback(async (rowsOverride?: ProductRow[]) => {
+    const rows = rowsOverride ?? (await fetchProductsForExport({ q, category, active, sort, dir }));
 
     const worksheet = buildWorksheet(rows, [
       { key: "sku", header: "SKU", type: "string", value: (row: ProductRow) => row.sku },
@@ -327,7 +326,7 @@ export function ProductsPage() {
     });
 
     downloadWorkbook(workbook, `products_export_${formatISODate(new Date())}.xlsx`);
-  }
+  }, [q, category, active, sort, dir, profile.name]);
 
   const createMutation = useMutation({
     mutationFn: async (values: ProductFormInput) => {
@@ -536,7 +535,7 @@ export function ProductsPage() {
     );
 
     return cols;
-  }, [deletable, writable, toggleActiveMutation]);
+  }, [deletable, writable, toggleActiveMutation, handleExport]);
 
   function openCreate() {
     setEditingId(null);
@@ -769,6 +768,9 @@ export function ProductsPage() {
     </div>
   );
 }
+
+
+
 
 
 

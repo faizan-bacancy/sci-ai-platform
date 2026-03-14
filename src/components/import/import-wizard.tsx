@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 
 import { FileDropzone } from "@/components/import/file-dropzone";
@@ -100,7 +100,7 @@ export function ImportWizard({
   );
 
   const [step, setStep] = useState(1);
-  const [entity, setEntity] = useState<ImportEntity>(defaultEntity);
+  const [selectedEntity, setSelectedEntity] = useState<ImportEntity>(defaultEntity);
   const [fileName, setFileName] = useState("");
   const [sourceColumns, setSourceColumns] = useState<string[]>([]);
   const [rawRows, setRawRows] = useState<Record<string, unknown>[]>([]);
@@ -126,11 +126,7 @@ export function ImportWizard({
   });
   const [reportRows, setReportRows] = useState<ReportRow[]>([]);
 
-  useEffect(() => {
-    if (!allowed.includes(entity)) {
-      setEntity(allowed[0] ?? "products");
-    }
-  }, [allowed, entity]);
+  const entity = allowed.includes(selectedEntity) ? selectedEntity : (allowed[0] ?? "products");
 
   const config = importConfigs[entity];
 
@@ -154,7 +150,7 @@ export function ImportWizard({
   const validationErrorCount = Object.keys(validationErrors).length;
 
   function resetWizard(nextEntity?: ImportEntity) {
-    if (nextEntity) setEntity(nextEntity);
+    if (nextEntity) setSelectedEntity(nextEntity);
     setStep(1);
     setFileName("");
     setSourceColumns([]);
@@ -834,5 +830,10 @@ export function ImportWizard({
     </Card>
   );
 }
+
+
+
+
+
 
 

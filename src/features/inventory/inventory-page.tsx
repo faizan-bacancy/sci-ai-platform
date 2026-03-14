@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ColumnDef, type SortingState } from "@tanstack/react-table";
 import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { MoreHorizontal } from "lucide-react";
 
@@ -151,7 +151,6 @@ export function InventoryPage() {
   const { data: warehouses } = useQuery({ queryKey: ["warehouses"], queryFn: fetchWarehouses });
 
   const params = { q, warehouse, status, page };
-  const exportParams = { q, warehouse, status };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["inventory", params],
@@ -165,8 +164,8 @@ export function InventoryPage() {
   const [newQty, setNewQty] = useState("");
   const [reason, setReason] = useState("");
 
-  async function handleExport(rowsOverride?: InventoryRow[]) {
-    const rows = rowsOverride ?? (await fetchInventoryForExport(exportParams));
+  const handleExport = useCallback(async (rowsOverride?: InventoryRow[]) => {
+    const rows = rowsOverride ?? (await fetchInventoryForExport({ q, warehouse, status }));
 
     const worksheet = buildWorksheet(rows, [
       { key: "sku", header: "SKU", type: "string", value: (row: InventoryRow) => row.product?.sku ?? "" },
@@ -193,7 +192,7 @@ export function InventoryPage() {
     });
 
     downloadWorkbook(workbook, `inventory_export_${formatISODate(new Date())}.xlsx`);
-  }
+  }, [q, warehouse, status, profile.name]);
 
   const adjustMutation = useMutation({
     mutationFn: async () => {
@@ -296,7 +295,7 @@ export function InventoryPage() {
         ),
       },
     ];
-  }, [writable]);
+  }, [writable, handleExport]);
 
   const pageCount = Math.ceil((data?.count ?? 0) / PAGE_SIZE) || 1;
 
@@ -432,5 +431,10 @@ export function InventoryPage() {
     </div>
   );
 }
+
+
+
+
+
 
 

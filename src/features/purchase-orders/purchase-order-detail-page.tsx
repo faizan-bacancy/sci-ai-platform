@@ -29,6 +29,8 @@ import { createClient } from "@/lib/supabase/browser";
 
 import type { PurchaseOrderDetail } from "./schema";
 
+type PurchaseOrderLine = PurchaseOrderDetail["lines"][number];
+
 function statusBadge(status: string) {
   switch (status) {
     case "draft":
@@ -119,12 +121,12 @@ export function PurchaseOrderDetailPage({ purchaseOrderId }: { purchaseOrderId: 
     const lines = linesOverride ?? (data?.lines ?? []);
 
     const worksheet = buildWorksheet(lines, [
-      { key: "sku", header: "SKU", type: "string", value: (line: any) => line.product?.sku ?? "" },
-      { key: "product", header: "Product", type: "string", value: (line: any) => line.product?.name ?? "" },
-      { key: "qty_ordered", header: "Qty Ordered", type: "number", value: (line: any) => line.qty_ordered },
-      { key: "qty_received", header: "Qty Received", type: "number", value: (line: any) => line.qty_received },
-      { key: "unit_cost", header: "Unit Cost", type: "currency", value: (line: any) => line.unit_cost },
-      { key: "line_total", header: "Line Total", type: "currency", value: (line: any) => line.line_total },
+      { key: "sku", header: "SKU", type: "string", value: (line: PurchaseOrderLine) => line.product?.sku ?? "" },
+      { key: "product", header: "Product", type: "string", value: (line: PurchaseOrderLine) => line.product?.name ?? "" },
+      { key: "qty_ordered", header: "Qty Ordered", type: "number", value: (line: PurchaseOrderLine) => line.qty_ordered },
+      { key: "qty_received", header: "Qty Received", type: "number", value: (line: PurchaseOrderLine) => line.qty_received },
+      { key: "unit_cost", header: "Unit Cost", type: "currency", value: (line: PurchaseOrderLine) => line.unit_cost },
+      { key: "line_total", header: "Line Total", type: "currency", value: (line: PurchaseOrderLine) => line.line_total },
     ]);
 
     const workbook = XLSX.utils.book_new();
@@ -260,6 +262,8 @@ export function PurchaseOrderDetailPage({ purchaseOrderId }: { purchaseOrderId: 
     </div>
   );
 }
+
+
 
 
 
