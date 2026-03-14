@@ -18,6 +18,21 @@ Open `http://localhost:3000`.
 ## Environment variables
 See `.env.example`.
 
+## Supabase migrations
+SQL migrations live in `supabase/migrations`.
+
+1. Install Supabase CLI (if needed):
+   - `npm i -g supabase`
+2. Login and link project:
+   - `supabase login`
+   - `supabase link --project-ref <your-project-ref>`
+3. Apply pending migrations to remote:
+   - `supabase db push`
+
+For local DB workflow:
+- Start local stack: `supabase start`
+- Apply migrations locally: `supabase migration up`
+
 ## Routes
 - Public:
   - `/login`
@@ -36,6 +51,7 @@ New signups default to `viewer`. To promote a user to `admin`, run a one-time SQ
 ```sql
 update public.profiles
 set role = 'admin'
-where email = 'you@company.com';
+where lower(email) = lower('you@company.com');
 ```
 
+Note: `enforce_profile_update()` now allows trusted backend/admin sessions (`service_role`, `postgres`, `supabase_admin`) to update protected profile fields without disabling triggers.
