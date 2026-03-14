@@ -16,6 +16,7 @@ import { useProfile } from "@/components/app/profile-context";
 import { DataTable } from "@/components/shared/data-table";
 import { FilterBar } from "@/components/shared/filter-bar";
 import { FormField } from "@/components/shared/form-field";
+import { DatePicker } from "@/components/shared/date-picker";
 import { PageHeader } from "@/components/shared/page-header";
 import { SlideOverPanel } from "@/components/shared/slide-over-panel";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -441,22 +442,22 @@ export function PurchaseOrdersPage() {
           </SelectContent>
         </Select>
 
-        <Input
-          type="date"
+        <DatePicker
           value={fromDate}
-          onChange={(event) => {
-            setFromDate(event.target.value);
+          onChange={(value) => {
+            setFromDate(value);
             setPage(1);
           }}
+          placeholder="From date"
           className="w-full sm:w-44"
         />
-        <Input
-          type="date"
+        <DatePicker
           value={toDate}
-          onChange={(event) => {
-            setToDate(event.target.value);
+          onChange={(value) => {
+            setToDate(value);
             setPage(1);
           }}
+          placeholder="To date"
           className="w-full sm:w-44"
         />
       </FilterBar>
@@ -480,8 +481,19 @@ export function PurchaseOrdersPage() {
         onRowClick={(row) => router.push(`/purchase-orders/${row.id}`)}
       />
 
-      <SlideOverPanel open={panelOpen} onOpenChange={setPanelOpen} title="New purchase order">
-        <form className="space-y-4" onSubmit={form.handleSubmit((values) => createMutation.mutate(values))}>
+      <SlideOverPanel open={panelOpen} onOpenChange={setPanelOpen} title="New purchase order"
+        footer={
+          <div className="flex gap-2">
+            <Button type="submit" form="po-form" disabled={createMutation.isPending}>
+              Create PO
+            </Button>
+            <Button type="button" variant="secondary" onClick={() => setPanelOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        }
+      >
+        <form id="po-form" className="space-y-4" onSubmit={form.handleSubmit((values) => createMutation.mutate(values))}>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <FormField label="Supplier" error={form.formState.errors.supplier_id?.message}>
               <Select
@@ -536,17 +548,17 @@ export function PurchaseOrdersPage() {
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <FormField label="Order date">
-              <Input
-                type="date"
+              <DatePicker
                 value={form.watch("order_date") ?? ""}
-                onChange={(event) => form.setValue("order_date", event.target.value)}
+                onChange={(value) => form.setValue("order_date", value)}
+                placeholder="Select date"
               />
             </FormField>
             <FormField label="Expected delivery">
-              <Input
-                type="date"
+              <DatePicker
                 value={form.watch("expected_delivery_date") ?? ""}
-                onChange={(event) => form.setValue("expected_delivery_date", event.target.value)}
+                onChange={(value) => form.setValue("expected_delivery_date", value)}
+                placeholder="Select date"
               />
             </FormField>
           </div>
@@ -653,18 +665,17 @@ export function PurchaseOrdersPage() {
             </div>
           ) : null}
 
-          <div className="flex gap-2">
-            <Button type="submit" disabled={createMutation.isPending}>
-              Create PO
-            </Button>
-            <Button type="button" variant="secondary" onClick={() => setPanelOpen(false)}>
-              Cancel
-            </Button>
-          </div>
-        </form>
+          </form>
       </SlideOverPanel>
     </div>
   );
 }
+
+
+
+
+
+
+
 
 

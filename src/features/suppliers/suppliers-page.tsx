@@ -497,8 +497,19 @@ export function SuppliersPage() {
         onRowClick={(row) => router.push(`/suppliers/${row.id}`)}
       />
 
-      <SlideOverPanel open={panelOpen} onOpenChange={setPanelOpen} title="New supplier">
-        <form className="space-y-4" onSubmit={form.handleSubmit((values) => createMutation.mutate(values))}>
+      <SlideOverPanel open={panelOpen} onOpenChange={setPanelOpen} title="New supplier"
+        footer={
+          <div className="flex gap-2">
+            <Button type="submit" form="supplier-form" disabled={createMutation.isPending}>
+              Create supplier
+            </Button>
+            <Button type="button" variant="secondary" onClick={() => setPanelOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        }
+      >
+        <form id="supplier-form" className="space-y-4" onSubmit={form.handleSubmit((values) => createMutation.mutate(values))}>
           <FormField label="Company name" error={form.formState.errors.company_name?.message}>
             <Input {...form.register("company_name")} />
           </FormField>
@@ -554,18 +565,14 @@ export function SuppliersPage() {
             </div>
           ) : null}
 
-          <div className="flex gap-2">
-            <Button type="submit" disabled={createMutation.isPending}>
-              Create supplier
-            </Button>
-            <Button type="button" variant="secondary" onClick={() => setPanelOpen(false)}>
-              Cancel
-            </Button>
-          </div>
-        </form>
+          </form>
       </SlideOverPanel>
     </div>
   );
 }
+
+
+
+
 
 

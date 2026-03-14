@@ -643,11 +643,30 @@ export function ProductsPage() {
           if (!open) setEditingId(null);
         }}
         title={editingId ? "Edit product" : "New product"}
+        footer={
+          <div className="flex gap-2">
+            <Button
+              type="submit"
+              form="product-form"
+              disabled={createMutation.isPending || updateMutation.isPending}
+            >
+              {editingId ? "Save changes" : "Create product"}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setPanelOpen(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        }
       >
         {editingId && detailQuery.isLoading ? (
           <div className="text-sm text-muted-foreground">Loading...</div>
         ) : (
           <form
+            id="product-form"
             className="space-y-4"
             onSubmit={form.handleSubmit((values) => {
               if (editingId) {
@@ -734,15 +753,7 @@ export function ProductsPage() {
               </div>
             ) : null}
 
-            <div className="flex gap-2">
-              <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
-                {editingId ? "Save changes" : "Create product"}
-              </Button>
-              <Button type="button" variant="secondary" onClick={() => setPanelOpen(false)}>
-                Cancel
-              </Button>
-            </div>
-          </form>
+            </form>
         )}
       </SlideOverPanel>
 
@@ -758,5 +769,9 @@ export function ProductsPage() {
     </div>
   );
 }
+
+
+
+
 
 
