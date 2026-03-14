@@ -14,6 +14,8 @@ import type {
 import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
+import * as XLSX from "xlsx";
+import { MoreHorizontal } from "lucide-react";
 
 import { useProfile } from "@/components/app/profile-context";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
@@ -25,6 +27,12 @@ import { SlideOverPanel } from "@/components/shared/slide-over-panel";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -35,6 +43,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { addMetadataSheet, buildWorksheet, downloadWorkbook, formatISODate } from "@/lib/excel";
 import { canDelete, canWrite } from "@/lib/permissions";
 import { createClient } from "@/lib/supabase/browser";
 
@@ -52,26 +61,30 @@ type ProductDetail = {
   id: string;
 } & ProductFormValues;
 
-function sumOnHand(inventory?: { qty_on_hand: number }[]) {
-  return (inventory ?? []).reduce((acc, r) => acc + (r.qty_on_hand ?? 0), 0);
-}
-
-function stockLabel(totalOnHand: number) {
-  if (totalOnHand <= 0)
-    return { label: "Out of Stock", variant: "destructive" as const };
-  if (totalOnHand < LOW_STOCK_THRESHOLD)
-    return { label: "Low Stock", variant: "outline" as const };
-  return { label: "In Stock", variant: "secondary" as const };
-}
-
-async function fetchProducts(params: {
+type ProductQueryParams = {
   q: string;
   category: string;
   active: string;
   page: number;
   sort: string;
   dir: string;
-}) {
+};
+
+function sumOnHand(inventory?: { qty_on_hand: number }[]) {
+  return (inventory ?? []).reduce((acc, row) => acc + (row.qty_on_hand ?? 0), 0);
+}
+
+function stockLabel(totalOnHand: number) {
+  if (totalOnHand <= 0) {
+    return { label: "Out of Stock", variant: "destructive" as const };
+  }
+  if (totalOnHand < LOW_STOCK_THRESHOLD) {
+    return { label: "Low Stock", variant: "outline" as const };
+  }
+  return { label: "In Stock", variant: "secondary" as const };
+}
+
+async function fetchProducts(params: ProductQueryParams) {
   const supabase = createClient();
   let query = supabase
     .from("products")
@@ -100,15 +113,12 @@ async function fetchProducts(params: {
   )
     ? params.sort
     : "name";
-  const ascending = params.dir !== "desc";
 
+  const ascending = params.dir !== "desc";
   const from = (params.page - 1) * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1;
 
-  const { data, count, error } = await query
-    .order(sortField, { ascending })
-    .range(from, to);
-
+  const { data, count, error } = await query.order(sortField, { ascending }).range(from, to);
   if (error) throw new Error(error.message);
 
   return {
@@ -117,10 +127,45 @@ async function fetchProducts(params: {
   };
 }
 
+async function fetchProductsForExport(params: Omit<ProductQueryParams, "page">) {
+  const supabase = createClient();
+  let query = supabase
+    .from("products")
+    .select("id,sku,name,category,unit_of_measure,unit_cost,is_active,inventory(qty_on_hand)");
+
+  if (params.q.trim()) {
+    const q = params.q.trim();
+    query = query.or(`name.ilike.%${q}%,sku.ilike.%${q}%`);
+  }
+
+  if (params.category !== "all") {
+    query = query.eq("category", params.category);
+  }
+
+  if (params.active === "active") {
+    query = query.eq("is_active", true);
+  } else if (params.active === "inactive") {
+    query = query.eq("is_active", false);
+  }
+
+  const sortField = ["sku", "name", "category", "unit_cost", "is_active"].includes(
+    params.sort,
+  )
+    ? params.sort
+    : "name";
+
+  const ascending = params.dir !== "desc";
+  const { data, error } = await query.order(sortField, { ascending });
+  if (error) throw new Error(error.message);
+
+  return (data ?? []) as ProductRow[];
+}
+
 async function fetchProductDetail(id: string): Promise<ProductDetail> {
   const supabase = createClient();
   const { data, error } = await supabase.from("products").select("*").eq("id", id).single();
   if (error) throw new Error(error.message);
+
   type ProductDbRow = {
     id: string;
     sku: string;
@@ -135,6 +180,7 @@ async function fetchProductDetail(id: string): Promise<ProductDetail> {
     image_url: string | null;
     is_active: boolean;
   };
+
   const row = data as ProductDbRow;
   return {
     id: row.id,
@@ -154,15 +200,15 @@ async function fetchProductDetail(id: string): Promise<ProductDetail> {
 
 async function checkSkuUnique(sku: string, excludeId?: string) {
   const supabase = createClient();
-  let q = supabase.from("products").select("id").ilike("sku", sku);
-  if (excludeId) q = q.neq("id", excludeId);
-  const { data, error } = await q.limit(1);
+  let query = supabase.from("products").select("id").ilike("sku", sku);
+  if (excludeId) query = query.neq("id", excludeId);
+  const { data, error } = await query.limit(1);
   if (error) throw new Error(error.message);
   return (data ?? []).length === 0;
 }
 
 function resolveUpdater<T>(updater: Updater<T>, current: T): T {
-  return typeof updater === "function" ? (updater as (c: T) => T)(current) : updater;
+  return typeof updater === "function" ? (updater as (value: T) => T)(current) : updater;
 }
 
 export function ProductsPage() {
@@ -171,27 +217,15 @@ export function ProductsPage() {
   const deletable = canDelete(profile.role);
 
   const [q, setQ] = useQueryState("q", parseAsString.withDefault(""));
-  const [category, setCategory] = useQueryState(
-    "category",
-    parseAsString.withDefault("all"),
-  );
-  const [active, setActive] = useQueryState(
-    "active",
-    parseAsString.withDefault("all"),
-  );
+  const [category, setCategory] = useQueryState("category", parseAsString.withDefault("all"));
+  const [active, setActive] = useQueryState("active", parseAsString.withDefault("all"));
   const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1));
-  const [sort, setSort] = useQueryState(
-    "sort",
-    parseAsString.withDefault("name"),
-  );
+  const [sort, setSort] = useQueryState("sort", parseAsString.withDefault("name"));
   const [dir, setDir] = useQueryState("dir", parseAsString.withDefault("asc"));
 
-  const sorting = useMemo<SortingState>(
-    () => [{ id: sort, desc: dir === "desc" }],
-    [sort, dir],
-  );
-
+  const sorting = useMemo<SortingState>(() => [{ id: sort, desc: dir === "desc" }], [sort, dir]);
   const params = { q, category, active, page, sort, dir };
+  const exportParams = { q, category, active, sort, dir };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["products", params],
@@ -201,12 +235,14 @@ export function ProductsPage() {
   const queryClient = useQueryClient();
 
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
-  const selectedIds = useMemo(() => {
-    return Object.entries(rowSelection)
-      .filter(([, v]) => v)
-      .map(([k]) => data?.rows?.[Number(k)]?.id)
-      .filter(Boolean) as string[];
-  }, [rowSelection, data?.rows]);
+  const selectedIds = useMemo(
+    () =>
+      Object.entries(rowSelection)
+        .filter(([, selected]) => selected)
+        .map(([index]) => data?.rows?.[Number(index)]?.id)
+        .filter(Boolean) as string[],
+    [rowSelection, data?.rows],
+  );
 
   const [panelOpen, setPanelOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -236,29 +272,68 @@ export function ProductsPage() {
   });
 
   useEffect(() => {
-    if (!editingId) return;
-    if (!detailQuery.data) return;
-    const d = detailQuery.data;
+    if (!editingId || !detailQuery.data) return;
+    const detail = detailQuery.data;
     form.reset({
-      sku: d.sku,
-      name: d.name,
-      description: d.description,
-      category: d.category,
-      unit_of_measure: d.unit_of_measure,
-      unit_cost: d.unit_cost,
-      selling_price: d.selling_price,
-      minimum_order_quantity: d.minimum_order_quantity,
-      lead_time_days: d.lead_time_days,
-      image_url: d.image_url,
-      is_active: d.is_active,
+      sku: detail.sku,
+      name: detail.name,
+      description: detail.description,
+      category: detail.category,
+      unit_of_measure: detail.unit_of_measure,
+      unit_cost: detail.unit_cost,
+      selling_price: detail.selling_price,
+      minimum_order_quantity: detail.minimum_order_quantity,
+      lead_time_days: detail.lead_time_days,
+      image_url: detail.image_url,
+      is_active: detail.is_active,
     });
   }, [editingId, detailQuery.data, form]);
+
+  async function handleExport(rowsOverride?: ProductRow[]) {
+    const rows = rowsOverride ?? (await fetchProductsForExport(exportParams));
+
+    const worksheet = buildWorksheet(rows, [
+      { key: "sku", header: "SKU", type: "string", value: (row: ProductRow) => row.sku },
+      { key: "name", header: "Product Name", type: "string", value: (row: ProductRow) => row.name },
+      { key: "category", header: "Category", type: "string", value: (row: ProductRow) => row.category ?? "" },
+      {
+        key: "unit_of_measure",
+        header: "Unit of Measure",
+        type: "string",
+        value: (row: ProductRow) => row.unit_of_measure ?? "",
+      },
+      { key: "unit_cost", header: "Unit Cost", type: "currency", value: (row: ProductRow) => row.unit_cost },
+      {
+        key: "stock",
+        header: "On Hand",
+        type: "number",
+        value: (row: ProductRow) => sumOnHand(row.inventory),
+      },
+      {
+        key: "is_active",
+        header: "Active",
+        type: "string",
+        value: (row: ProductRow) => (row.is_active ? "Yes" : "No"),
+      },
+    ]);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Products");
+    addMetadataSheet(workbook, {
+      "Export date": formatISODate(new Date()),
+      Filters: `search=${q || ""}; category=${category}; status=${active}`,
+      "Total rows": rows.length,
+      User: profile.name,
+    });
+
+    downloadWorkbook(workbook, `products_export_${formatISODate(new Date())}.xlsx`);
+  }
 
   const createMutation = useMutation({
     mutationFn: async (values: ProductFormInput) => {
       const parsed = productFormSchema.parse(values);
-      const unique = await checkSkuUnique(parsed.sku);
-      if (!unique) throw new Error("SKU already exists.");
+      const isUnique = await checkSkuUnique(parsed.sku);
+      if (!isUnique) throw new Error("SKU already exists.");
 
       const supabase = createClient();
       const payload = {
@@ -280,16 +355,10 @@ export function ProductsPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({
-      id,
-      values,
-    }: {
-      id: string;
-      values: ProductFormInput;
-    }) => {
+    mutationFn: async ({ id, values }: { id: string; values: ProductFormInput }) => {
       const parsed = productFormSchema.parse(values);
-      const unique = await checkSkuUnique(parsed.sku, id);
-      if (!unique) throw new Error("SKU already exists.");
+      const isUnique = await checkSkuUnique(parsed.sku, id);
+      if (!isUnique) throw new Error("SKU already exists.");
 
       const supabase = createClient();
       const payload = {
@@ -310,18 +379,9 @@ export function ProductsPage() {
   });
 
   const toggleActiveMutation = useMutation({
-    mutationFn: async ({
-      id,
-      is_active,
-    }: {
-      id: string;
-      is_active: boolean;
-    }) => {
+    mutationFn: async ({ id, is_active }: { id: string; is_active: boolean }) => {
       const supabase = createClient();
-      const { error } = await supabase
-        .from("products")
-        .update({ is_active })
-        .eq("id", id);
+      const { error } = await supabase.from("products").update({ is_active }).eq("id", id);
       if (error) throw new Error(error.message);
     },
     onSuccess: async () => {
@@ -360,17 +420,17 @@ export function ProductsPage() {
         header: ({ table }) => (
           <Checkbox
             checked={table.getIsAllPageRowsSelected()}
-            onCheckedChange={(v) => table.toggleAllPageRowsSelected(!!v)}
+            onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
             aria-label="Select all"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
           />
         ),
         cell: ({ row }) => (
           <Checkbox
             checked={row.getIsSelected()}
-            onCheckedChange={(v) => row.toggleSelected(!!v)}
+            onCheckedChange={(value) => row.toggleSelected(!!value)}
             aria-label="Select row"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
           />
         ),
         enableSorting: false,
@@ -382,26 +442,16 @@ export function ProductsPage() {
       {
         accessorKey: "sku",
         header: ({ column }) => (
-          <button
-            type="button"
-            className="cursor-pointer select-none"
-            onClick={column.getToggleSortingHandler()}
-          >
+          <button type="button" className="cursor-pointer select-none" onClick={column.getToggleSortingHandler()}>
             SKU
           </button>
         ),
-        cell: ({ row }) => (
-          <span className="font-mono text-xs">{row.original.sku}</span>
-        ),
+        cell: ({ row }) => <span className="font-mono text-xs">{row.original.sku}</span>,
       },
       {
         accessorKey: "name",
         header: ({ column }) => (
-          <button
-            type="button"
-            className="cursor-pointer select-none"
-            onClick={column.getToggleSortingHandler()}
-          >
+          <button type="button" className="cursor-pointer select-none" onClick={column.getToggleSortingHandler()}>
             Name
           </button>
         ),
@@ -410,29 +460,21 @@ export function ProductsPage() {
       {
         accessorKey: "category",
         header: ({ column }) => (
-          <button
-            type="button"
-            className="cursor-pointer select-none"
-            onClick={column.getToggleSortingHandler()}
-          >
+          <button type="button" className="cursor-pointer select-none" onClick={column.getToggleSortingHandler()}>
             Category
           </button>
         ),
-        cell: ({ row }) => row.original.category ?? "—",
+        cell: ({ row }) => row.original.category ?? "-",
       },
       {
         accessorKey: "unit_of_measure",
         header: () => "UOM",
-        cell: ({ row }) => row.original.unit_of_measure ?? "—",
+        cell: ({ row }) => row.original.unit_of_measure ?? "-",
       },
       {
         accessorKey: "unit_cost",
         header: ({ column }) => (
-          <button
-            type="button"
-            className="cursor-pointer select-none"
-            onClick={column.getToggleSortingHandler()}
-          >
+          <button type="button" className="cursor-pointer select-none" onClick={column.getToggleSortingHandler()}>
             Unit Cost
           </button>
         ),
@@ -443,8 +485,8 @@ export function ProductsPage() {
         header: () => "Stock",
         cell: ({ row }) => {
           const total = sumOnHand(row.original.inventory);
-          const s = stockLabel(total);
-          return <StatusBadge label={s.label} variant={s.variant} />;
+          const status = stockLabel(total);
+          return <StatusBadge label={status.label} variant={status.variant} />;
         },
       },
       {
@@ -461,7 +503,7 @@ export function ProductsPage() {
             );
           }
           return (
-            <div onClick={(e) => e.stopPropagation()}>
+            <div onClick={(event) => event.stopPropagation()}>
               <Switch
                 checked={value}
                 onCheckedChange={(next) =>
@@ -471,6 +513,27 @@ export function ProductsPage() {
             </div>
           );
         },
+      },
+      {
+        id: "actions",
+        header: () => "",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div onClick={(event) => event.stopPropagation()}>
+            <DropdownMenu>
+              <DropdownMenuTrigger>
+                <Button variant="ghost" size="icon">
+                  <MoreHorizontal className="h-4 w-4" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => void handleExport([row.original])}>
+                  Export row
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        ),
       },
     );
 
@@ -501,10 +564,10 @@ export function ProductsPage() {
       <FilterBar>
         <div className="flex flex-1 items-center gap-2">
           <Input
-            placeholder="Search by name or SKU…"
+            placeholder="Search by name or SKU..."
             value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
+            onChange={(event) => {
+              setQ(event.target.value);
               setPage(1);
             }}
           />
@@ -512,8 +575,8 @@ export function ProductsPage() {
 
         <Select
           value={category}
-          onValueChange={(v) => {
-            setCategory(v);
+          onValueChange={(value) => {
+            setCategory(value);
             setPage(1);
           }}
         >
@@ -530,8 +593,8 @@ export function ProductsPage() {
 
         <Select
           value={active}
-          onValueChange={(v) => {
-            setActive(v);
+          onValueChange={(value) => {
+            setActive(value);
             setPage(1);
           }}
         >
@@ -546,20 +609,14 @@ export function ProductsPage() {
         </Select>
 
         {deletable ? (
-          <Button
-            variant="destructive"
-            disabled={selectedIds.length === 0}
-            onClick={() => setConfirmOpen(true)}
-          >
+          <Button variant="destructive" disabled={selectedIds.length === 0} onClick={() => setConfirmOpen(true)}>
             Delete selected
           </Button>
         ) : null}
       </FilterBar>
 
       {error ? (
-        <div className="rounded-md border p-4 text-sm text-destructive">
-          {(error as Error).message}
-        </div>
+        <div className="rounded-md border p-4 text-sm text-destructive">{(error as Error).message}</div>
       ) : null}
 
       <DataTable
@@ -567,25 +624,30 @@ export function ProductsPage() {
         data={data?.rows ?? []}
         isLoading={isLoading}
         sorting={sorting}
+        toolbar={
+          <Button variant="secondary" onClick={() => void handleExport()}>
+            Export to Excel
+          </Button>
+        }
         onSortingChange={onSortingChange}
         rowSelection={deletable ? rowSelection : undefined}
         onRowSelectionChange={deletable ? setRowSelection : undefined}
         pageIndex={Math.max(page - 1, 0)}
         pageCount={pageCount}
-        onPageChange={(idx) => setPage(idx + 1)}
+        onPageChange={(index) => setPage(index + 1)}
         onRowClick={(row) => (writable ? openEdit(row) : null)}
       />
 
       <SlideOverPanel
         open={panelOpen}
-        onOpenChange={(o) => {
-          setPanelOpen(o);
-          if (!o) setEditingId(null);
+        onOpenChange={(open) => {
+          setPanelOpen(open);
+          if (!open) setEditingId(null);
         }}
         title={editingId ? "Edit product" : "New product"}
       >
         {editingId && detailQuery.isLoading ? (
-          <div className="text-sm text-muted-foreground">Loading…</div>
+          <div className="text-sm text-muted-foreground">Loading...</div>
         ) : (
           <form
             className="space-y-4"
@@ -606,50 +668,31 @@ export function ProductsPage() {
               </FormField>
             </div>
 
-            <FormField
-              label="Description"
-              error={form.formState.errors.description?.message}
-            >
+            <FormField label="Description" error={form.formState.errors.description?.message}>
               <Textarea rows={3} {...form.register("description")} />
             </FormField>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <FormField
-                label="Category"
-                error={form.formState.errors.category?.message}
-              >
-                <Input
-                  {...form.register("category")}
-                  placeholder="e.g. Raw Materials"
-                />
+              <FormField label="Category" error={form.formState.errors.category?.message}>
+                <Input {...form.register("category")} placeholder="e.g. Raw Materials" />
               </FormField>
               <FormField
                 label="Unit of Measure"
                 error={form.formState.errors.unit_of_measure?.message}
               >
-                <Input
-                  {...form.register("unit_of_measure")}
-                  placeholder="e.g. each, kg"
-                />
+                <Input {...form.register("unit_of_measure")} placeholder="e.g. each, kg" />
               </FormField>
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <FormField
-                label="Unit Cost"
-                error={form.formState.errors.unit_cost?.message}
-              >
+              <FormField label="Unit Cost" error={form.formState.errors.unit_cost?.message}>
                 <Input type="number" step="0.01" {...form.register("unit_cost")} />
               </FormField>
               <FormField
                 label="Selling Price"
                 error={form.formState.errors.selling_price?.message}
               >
-                <Input
-                  type="number"
-                  step="0.01"
-                  {...form.register("selling_price")}
-                />
+                <Input type="number" step="0.01" {...form.register("selling_price")} />
               </FormField>
             </div>
 
@@ -658,28 +701,17 @@ export function ProductsPage() {
                 label="Min Order Qty"
                 error={form.formState.errors.minimum_order_quantity?.message}
               >
-                <Input
-                  type="number"
-                  step="0.001"
-                  {...form.register("minimum_order_quantity")}
-                />
+                <Input type="number" step="0.001" {...form.register("minimum_order_quantity")} />
               </FormField>
               <FormField
                 label="Lead Time (days)"
                 error={form.formState.errors.lead_time_days?.message}
               >
-                <Input
-                  type="number"
-                  step="1"
-                  {...form.register("lead_time_days")}
-                />
+                <Input type="number" step="1" {...form.register("lead_time_days")} />
               </FormField>
             </div>
 
-            <FormField
-              label="Image URL"
-              error={form.formState.errors.image_url?.message}
-            >
+            <FormField label="Image URL" error={form.formState.errors.image_url?.message}>
               <Input {...form.register("image_url")} placeholder="https://..." />
             </FormField>
 
@@ -692,25 +724,20 @@ export function ProductsPage() {
               </div>
               <Switch
                 checked={form.watch("is_active")}
-                onCheckedChange={(v) => form.setValue("is_active", v)}
+                onCheckedChange={(value) => form.setValue("is_active", value)}
               />
             </div>
 
             {(createMutation.error || updateMutation.error || detailQuery.error) ? (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
                 {(
-                  (createMutation.error ??
-                    updateMutation.error ??
-                    detailQuery.error) as Error
+                  (createMutation.error ?? updateMutation.error ?? detailQuery.error) as Error
                 ).message}
               </div>
             ) : null}
 
             <div className="flex gap-2">
-              <Button
-                type="submit"
-                disabled={createMutation.isPending || updateMutation.isPending}
-              >
+              <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
                 {editingId ? "Save changes" : "Create product"}
               </Button>
               <Button type="button" variant="secondary" onClick={() => setPanelOpen(false)}>
@@ -733,3 +760,4 @@ export function ProductsPage() {
     </div>
   );
 }
+

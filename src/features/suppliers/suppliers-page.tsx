@@ -9,6 +9,8 @@ import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
+import * as XLSX from "xlsx";
+import { MoreHorizontal } from "lucide-react";
 
 import { useProfile } from "@/components/app/profile-context";
 import { DataTable } from "@/components/shared/data-table";
@@ -18,6 +20,12 @@ import { PageHeader } from "@/components/shared/page-header";
 import { SlideOverPanel } from "@/components/shared/slide-over-panel";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -28,14 +36,11 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { addMetadataSheet, buildWorksheet, downloadWorkbook, formatISODate } from "@/lib/excel";
 import { canWrite } from "@/lib/permissions";
 import { createClient } from "@/lib/supabase/browser";
 
-import {
-  supplierFormSchema,
-  type SupplierFormInput,
-  type SupplierRow,
-} from "./schema";
+import { supplierFormSchema, type SupplierFormInput, type SupplierRow } from "./schema";
 
 const PAGE_SIZE = 25;
 
@@ -50,18 +55,18 @@ type SupplierQueryParams = {
 };
 
 function resolveUpdater<T>(updater: Updater<T>, current: T): T {
-  return typeof updater === "function" ? (updater as (c: T) => T)(current) : updater;
+  return typeof updater === "function" ? (updater as (value: T) => T)(current) : updater;
 }
 
 function Stars({ value }: { value: number }) {
   return (
     <div className="flex items-center gap-0.5">
-      {Array.from({ length: 5 }).map((_, i) => (
+      {Array.from({ length: 5 }).map((_, index) => (
         <span
-          key={i}
-          className={i < value ? "text-foreground" : "text-muted-foreground/40"}
+          key={index}
+          className={index < value ? "text-foreground" : "text-muted-foreground/40"}
         >
-          ★
+          *
         </span>
       ))}
     </div>
@@ -73,9 +78,7 @@ async function fetchSuppliers(params: SupplierQueryParams) {
 
   let query = supabase
     .from("suppliers")
-    .select("id,company_name,contact_name,country,rating,is_active", {
-      count: "exact",
-    });
+    .select("id,company_name,contact_name,country,rating,is_active", { count: "exact" });
 
   if (params.q.trim()) {
     const q = params.q.trim();
@@ -96,26 +99,21 @@ async function fetchSuppliers(params: SupplierQueryParams) {
     query = query.eq("is_active", false);
   }
 
-  const sortField = ["company_name", "country", "rating", "is_active"].includes(
-    params.sort,
-  )
+  const sortField = ["company_name", "country", "rating", "is_active"].includes(params.sort)
     ? params.sort
     : "company_name";
-  const ascending = params.dir !== "desc";
 
+  const ascending = params.dir !== "desc";
   const from = (params.page - 1) * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1;
 
-  const { data, count, error } = await query
-    .order(sortField, { ascending })
-    .range(from, to);
-
+  const { data, count, error } = await query.order(sortField, { ascending }).range(from, to);
   if (error) throw new Error(error.message);
 
   const rows = (data ?? []) as SupplierRow[];
-  const supplierIds = rows.map((r) => r.id);
-
+  const supplierIds = rows.map((row) => row.id);
   const counts: Record<string, number> = {};
+
   if (supplierIds.length) {
     const { data: links, error: linksError } = await supabase
       .from("supplier_products")
@@ -128,7 +126,64 @@ async function fetchSuppliers(params: SupplierQueryParams) {
     }
   }
 
-  return { rows, count: count ?? 0, counts };
+  return {
+    rows,
+    count: count ?? 0,
+    counts,
+  };
+}
+
+async function fetchSuppliersForExport(params: Omit<SupplierQueryParams, "page">) {
+  const supabase = createClient();
+
+  let query = supabase
+    .from("suppliers")
+    .select("id,company_name,contact_name,country,rating,is_active");
+
+  if (params.q.trim()) {
+    const q = params.q.trim();
+    query = query.or(`company_name.ilike.%${q}%,contact_name.ilike.%${q}%`);
+  }
+
+  if (params.country !== "all") {
+    query = query.eq("country", params.country);
+  }
+
+  if (params.rating !== "all") {
+    query = query.eq("rating", Number(params.rating));
+  }
+
+  if (params.active === "active") {
+    query = query.eq("is_active", true);
+  } else if (params.active === "inactive") {
+    query = query.eq("is_active", false);
+  }
+
+  const sortField = ["company_name", "country", "rating", "is_active"].includes(params.sort)
+    ? params.sort
+    : "company_name";
+
+  const ascending = params.dir !== "desc";
+  const { data, error } = await query.order(sortField, { ascending });
+  if (error) throw new Error(error.message);
+
+  const rows = (data ?? []) as SupplierRow[];
+  const supplierIds = rows.map((row) => row.id);
+  const counts: Record<string, number> = {};
+
+  if (supplierIds.length) {
+    const { data: links, error: linksError } = await supabase
+      .from("supplier_products")
+      .select("supplier_id")
+      .in("supplier_id", supplierIds);
+    if (linksError) throw new Error(linksError.message);
+
+    for (const link of (links ?? []) as { supplier_id: string }[]) {
+      counts[link.supplier_id] = (counts[link.supplier_id] ?? 0) + 1;
+    }
+  }
+
+  return { rows, counts };
 }
 
 export function SuppliersPage() {
@@ -137,30 +192,16 @@ export function SuppliersPage() {
   const router = useRouter();
 
   const [q, setQ] = useQueryState("q", parseAsString.withDefault(""));
-  const [country, setCountry] = useQueryState(
-    "country",
-    parseAsString.withDefault("all"),
-  );
-  const [rating, setRating] = useQueryState(
-    "rating",
-    parseAsString.withDefault("all"),
-  );
-  const [active, setActive] = useQueryState(
-    "active",
-    parseAsString.withDefault("all"),
-  );
+  const [country, setCountry] = useQueryState("country", parseAsString.withDefault("all"));
+  const [rating, setRating] = useQueryState("rating", parseAsString.withDefault("all"));
+  const [active, setActive] = useQueryState("active", parseAsString.withDefault("all"));
   const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1));
-  const [sort, setSort] = useQueryState(
-    "sort",
-    parseAsString.withDefault("company_name"),
-  );
+  const [sort, setSort] = useQueryState("sort", parseAsString.withDefault("company_name"));
   const [dir, setDir] = useQueryState("dir", parseAsString.withDefault("asc"));
 
-  const sorting = useMemo<SortingState>(
-    () => [{ id: sort, desc: dir === "desc" }],
-    [sort, dir],
-  );
+  const sorting = useMemo<SortingState>(() => [{ id: sort, desc: dir === "desc" }], [sort, dir]);
   const params = { q, country, rating, active, page, sort, dir };
+  const exportParams = { q, country, rating, active, sort, dir };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["suppliers", params],
@@ -168,7 +209,6 @@ export function SuppliersPage() {
   });
 
   const queryClient = useQueryClient();
-
   const [panelOpen, setPanelOpen] = useState(false);
 
   const form = useForm<SupplierFormInput>({
@@ -187,6 +227,42 @@ export function SuppliersPage() {
       is_active: true,
     },
   });
+
+  async function handleExport(rowsOverride?: SupplierRow[]) {
+    const exportData = rowsOverride
+      ? { rows: rowsOverride, counts: data?.counts ?? {} }
+      : await fetchSuppliersForExport(exportParams);
+
+    const worksheet = buildWorksheet(exportData.rows, [
+      { key: "company_name", header: "Company", type: "string", value: (row: SupplierRow) => row.company_name },
+      { key: "contact_name", header: "Contact", type: "string", value: (row: SupplierRow) => row.contact_name ?? "" },
+      { key: "country", header: "Country", type: "string", value: (row: SupplierRow) => row.country ?? "" },
+      { key: "rating", header: "Rating", type: "number", value: (row: SupplierRow) => row.rating ?? "" },
+      {
+        key: "product_count",
+        header: "Products",
+        type: "number",
+        value: (row: SupplierRow) => exportData.counts[row.id] ?? 0,
+      },
+      {
+        key: "is_active",
+        header: "Active",
+        type: "string",
+        value: (row: SupplierRow) => (row.is_active ? "Yes" : "No"),
+      },
+    ]);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Suppliers");
+    addMetadataSheet(workbook, {
+      "Export date": formatISODate(new Date()),
+      Filters: `search=${q || ""}; country=${country}; rating=${rating}; status=${active}`,
+      "Total rows": exportData.rows.length,
+      User: profile.name,
+    });
+
+    downloadWorkbook(workbook, `suppliers_export_${formatISODate(new Date())}.xlsx`);
+  }
 
   const createMutation = useMutation({
     mutationFn: async (values: SupplierFormInput) => {
@@ -217,10 +293,7 @@ export function SuppliersPage() {
   const toggleActiveMutation = useMutation({
     mutationFn: async ({ id, is_active }: { id: string; is_active: boolean }) => {
       const supabase = createClient();
-      const { error } = await supabase
-        .from("suppliers")
-        .update({ is_active })
-        .eq("id", id);
+      const { error } = await supabase.from("suppliers").update({ is_active }).eq("id", id);
       if (error) throw new Error(error.message);
     },
     onSuccess: async () => {
@@ -242,65 +315,44 @@ export function SuppliersPage() {
       {
         accessorKey: "company_name",
         header: ({ column }) => (
-          <button
-            type="button"
-            className="cursor-pointer select-none"
-            onClick={column.getToggleSortingHandler()}
-          >
+          <button type="button" className="cursor-pointer select-none" onClick={column.getToggleSortingHandler()}>
             Company
           </button>
         ),
-        cell: ({ row }) => (
-          <span className="font-medium">{row.original.company_name}</span>
-        ),
+        cell: ({ row }) => <span className="font-medium">{row.original.company_name}</span>,
       },
       {
         accessorKey: "contact_name",
         header: () => "Contact",
-        cell: ({ row }) => row.original.contact_name ?? "—",
+        cell: ({ row }) => row.original.contact_name ?? "-",
       },
       {
         accessorKey: "country",
         header: ({ column }) => (
-          <button
-            type="button"
-            className="cursor-pointer select-none"
-            onClick={column.getToggleSortingHandler()}
-          >
+          <button type="button" className="cursor-pointer select-none" onClick={column.getToggleSortingHandler()}>
             Country
           </button>
         ),
-        cell: ({ row }) => row.original.country ?? "—",
+        cell: ({ row }) => row.original.country ?? "-",
       },
       {
         accessorKey: "rating",
         header: ({ column }) => (
-          <button
-            type="button"
-            className="cursor-pointer select-none"
-            onClick={column.getToggleSortingHandler()}
-          >
+          <button type="button" className="cursor-pointer select-none" onClick={column.getToggleSortingHandler()}>
             Rating
           </button>
         ),
-        cell: ({ row }) =>
-          row.original.rating ? <Stars value={row.original.rating} /> : "—",
+        cell: ({ row }) => (row.original.rating ? <Stars value={row.original.rating} /> : "-"),
       },
       {
         id: "product_count",
         header: () => "Products",
-        cell: ({ row }) => {
-          return data?.counts?.[row.original.id] ?? 0;
-        },
+        cell: ({ row }) => data?.counts?.[row.original.id] ?? 0,
       },
       {
         accessorKey: "is_active",
         header: ({ column }) => (
-          <button
-            type="button"
-            className="cursor-pointer select-none"
-            onClick={column.getToggleSortingHandler()}
-          >
+          <button type="button" className="cursor-pointer select-none" onClick={column.getToggleSortingHandler()}>
             Active
           </button>
         ),
@@ -315,7 +367,7 @@ export function SuppliersPage() {
             );
           }
           return (
-            <div onClick={(e) => e.stopPropagation()}>
+            <div onClick={(event) => event.stopPropagation()}>
               <Switch
                 checked={value}
                 onCheckedChange={(next) =>
@@ -325,6 +377,27 @@ export function SuppliersPage() {
             </div>
           );
         },
+      },
+      {
+        id: "actions",
+        header: () => "",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div onClick={(event) => event.stopPropagation()}>
+            <DropdownMenu>
+              <DropdownMenuTrigger>
+                <Button variant="ghost" size="icon">
+                  <MoreHorizontal className="h-4 w-4" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => void handleExport([row.original])}>
+                  Export row
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        ),
       },
     ];
   }, [writable, toggleActiveMutation, data?.counts]);
@@ -336,28 +409,25 @@ export function SuppliersPage() {
       <PageHeader
         title="Suppliers"
         subtitle="Manage your vendor directory."
-        actions={
-          writable ? (
-            <Button onClick={() => setPanelOpen(true)}>New supplier</Button>
-          ) : null
-        }
+        actions={writable ? <Button onClick={() => setPanelOpen(true)}>New supplier</Button> : null}
       />
 
       <FilterBar>
         <div className="flex flex-1 items-center gap-2">
           <Input
-            placeholder="Search by company or contact…"
+            placeholder="Search by company or contact..."
             value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
+            onChange={(event) => {
+              setQ(event.target.value);
               setPage(1);
             }}
           />
         </div>
+
         <Select
           value={country}
-          onValueChange={(v) => {
-            setCountry(v);
+          onValueChange={(value) => {
+            setCountry(value);
             setPage(1);
           }}
         >
@@ -371,10 +441,11 @@ export function SuppliersPage() {
             <SelectItem value="United Kingdom">United Kingdom</SelectItem>
           </SelectContent>
         </Select>
+
         <Select
           value={rating}
-          onValueChange={(v) => {
-            setRating(v);
+          onValueChange={(value) => {
+            setRating(value);
             setPage(1);
           }}
         >
@@ -390,10 +461,11 @@ export function SuppliersPage() {
             <SelectItem value="1">1</SelectItem>
           </SelectContent>
         </Select>
+
         <Select
           value={active}
-          onValueChange={(v) => {
-            setActive(v);
+          onValueChange={(value) => {
+            setActive(value);
             setPage(1);
           }}
         >
@@ -408,51 +480,36 @@ export function SuppliersPage() {
         </Select>
       </FilterBar>
 
-      {error ? (
-        <div className="rounded-md border p-4 text-sm text-destructive">
-          {(error as Error).message}
-        </div>
-      ) : null}
+      {error ? <div className="rounded-md border p-4 text-sm text-destructive">{(error as Error).message}</div> : null}
 
       <DataTable
         columns={columns}
         data={data?.rows ?? []}
         isLoading={isLoading}
         sorting={sorting}
+        toolbar={
+          <Button variant="secondary" onClick={() => void handleExport()}>
+            Export to Excel
+          </Button>
+        }
         onSortingChange={onSortingChange}
         pageIndex={Math.max(page - 1, 0)}
         pageCount={pageCount}
-        onPageChange={(idx) => setPage(idx + 1)}
+        onPageChange={(index) => setPage(index + 1)}
         onRowClick={(row) => router.push(`/suppliers/${row.id}`)}
       />
 
-      <SlideOverPanel
-        open={panelOpen}
-        onOpenChange={setPanelOpen}
-        title="New supplier"
-      >
-        <form
-          className="space-y-4"
-          onSubmit={form.handleSubmit((values) => createMutation.mutate(values))}
-        >
-          <FormField
-            label="Company name"
-            error={form.formState.errors.company_name?.message}
-          >
+      <SlideOverPanel open={panelOpen} onOpenChange={setPanelOpen} title="New supplier">
+        <form className="space-y-4" onSubmit={form.handleSubmit((values) => createMutation.mutate(values))}>
+          <FormField label="Company name" error={form.formState.errors.company_name?.message}>
             <Input {...form.register("company_name")} />
           </FormField>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <FormField
-              label="Contact name"
-              error={form.formState.errors.contact_name?.message}
-            >
+            <FormField label="Contact name" error={form.formState.errors.contact_name?.message}>
               <Input {...form.register("contact_name")} />
             </FormField>
-            <FormField
-              label="Contact email"
-              error={form.formState.errors.contact_email?.message}
-            >
+            <FormField label="Contact email" error={form.formState.errors.contact_email?.message}>
               <Input {...form.register("contact_email")} />
             </FormField>
           </div>
@@ -467,27 +524,15 @@ export function SuppliersPage() {
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <FormField
-              label="Payment terms"
-              error={form.formState.errors.payment_terms?.message}
-            >
-              <Input
-                {...form.register("payment_terms")}
-                placeholder="e.g. Net 30"
-              />
+            <FormField label="Payment terms" error={form.formState.errors.payment_terms?.message}>
+              <Input {...form.register("payment_terms")} placeholder="e.g. Net 30" />
             </FormField>
-            <FormField
-              label="Currency"
-              error={form.formState.errors.currency?.message}
-            >
+            <FormField label="Currency" error={form.formState.errors.currency?.message}>
               <Input {...form.register("currency")} placeholder="e.g. USD" />
             </FormField>
           </div>
 
-          <FormField
-            label="Rating (1–5)"
-            error={form.formState.errors.rating?.message}
-          >
+          <FormField label="Rating (1-5)" error={form.formState.errors.rating?.message}>
             <Input type="number" min={1} max={5} step={1} {...form.register("rating")} />
           </FormField>
 
@@ -502,10 +547,7 @@ export function SuppliersPage() {
                 Inactive suppliers are hidden from procurement flows.
               </div>
             </div>
-            <Switch
-              checked={form.watch("is_active")}
-              onCheckedChange={(v) => form.setValue("is_active", v)}
-            />
+            <Switch checked={form.watch("is_active")} onCheckedChange={(value) => form.setValue("is_active", value)} />
           </div>
 
           {createMutation.error ? (
@@ -518,11 +560,7 @@ export function SuppliersPage() {
             <Button type="submit" disabled={createMutation.isPending}>
               Create supplier
             </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setPanelOpen(false)}
-            >
+            <Button type="button" variant="secondary" onClick={() => setPanelOpen(false)}>
               Cancel
             </Button>
           </div>
@@ -531,3 +569,4 @@ export function SuppliersPage() {
     </div>
   );
 }
+

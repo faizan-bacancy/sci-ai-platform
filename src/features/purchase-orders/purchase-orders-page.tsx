@@ -9,6 +9,8 @@ import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
 import { useFieldArray, useForm } from "react-hook-form";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import * as XLSX from "xlsx";
+import { MoreHorizontal } from "lucide-react";
 
 import { useProfile } from "@/components/app/profile-context";
 import { DataTable } from "@/components/shared/data-table";
@@ -18,6 +20,12 @@ import { PageHeader } from "@/components/shared/page-header";
 import { SlideOverPanel } from "@/components/shared/slide-over-panel";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -27,6 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { addMetadataSheet, buildWorksheet, downloadWorkbook, formatISODate } from "@/lib/excel";
 import { canWrite } from "@/lib/permissions";
 import { createClient } from "@/lib/supabase/browser";
 
@@ -81,27 +90,43 @@ async function fetchPurchaseOrders(params: PurchaseOrderQueryParams) {
     query = query.ilike("po_number", `%${q}%`);
   }
 
-  if (params.supplier !== "all") {
-    query = query.eq("supplier_id", params.supplier);
-  }
-
-  if (params.status !== "all") {
-    query = query.eq("status", params.status);
-  }
-
+  if (params.supplier !== "all") query = query.eq("supplier_id", params.supplier);
+  if (params.status !== "all") query = query.eq("status", params.status);
   if (params.from) query = query.gte("order_date", params.from);
   if (params.to) query = query.lte("order_date", params.to);
 
   const from = (params.page - 1) * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1;
 
-  const { data, count, error } = await query
-    .order("created_at", { ascending: false })
-    .range(from, to);
-
+  const { data, count, error } = await query.order("created_at", { ascending: false }).range(from, to);
   if (error) throw new Error(error.message);
 
   return { rows: (data ?? []) as unknown as PurchaseOrderRow[], count: count ?? 0 };
+}
+
+async function fetchPurchaseOrdersForExport(params: Omit<PurchaseOrderQueryParams, "page">) {
+  const supabase = createClient();
+
+  let query = supabase
+    .from("purchase_orders")
+    .select(
+      "id,po_number,status,order_date,expected_delivery_date,total_amount,currency,supplier_id,warehouse_id,supplier:suppliers(company_name),purchase_order_lines(id)",
+    );
+
+  if (params.q.trim()) {
+    const q = params.q.trim();
+    query = query.ilike("po_number", `%${q}%`);
+  }
+
+  if (params.supplier !== "all") query = query.eq("supplier_id", params.supplier);
+  if (params.status !== "all") query = query.eq("status", params.status);
+  if (params.from) query = query.gte("order_date", params.from);
+  if (params.to) query = query.lte("order_date", params.to);
+
+  const { data, error } = await query.order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+
+  return (data ?? []) as unknown as PurchaseOrderRow[];
 }
 
 async function fetchSuppliersOptions() {
@@ -117,10 +142,7 @@ async function fetchSuppliersOptions() {
 
 async function fetchWarehousesOptions() {
   const supabase = createClient();
-  const { data, error } = await supabase
-    .from("warehouses")
-    .select("id,name,code")
-    .order("name", { ascending: true });
+  const { data, error } = await supabase.from("warehouses").select("id,name,code").order("name", { ascending: true });
   if (error) throw new Error(error.message);
   return (data ?? []) as { id: string; name: string; code: string }[];
 }
@@ -134,12 +156,7 @@ async function fetchProductsOptions() {
     .order("name", { ascending: true })
     .limit(1000);
   if (error) throw new Error(error.message);
-  return (data ?? []) as {
-    id: string;
-    name: string;
-    sku: string;
-    unit_cost: number;
-  }[];
+  return (data ?? []) as { id: string; name: string; sku: string; unit_cost: number }[];
 }
 
 export function PurchaseOrdersPage() {
@@ -148,45 +165,25 @@ export function PurchaseOrdersPage() {
   const router = useRouter();
 
   const [q, setQ] = useQueryState("q", parseAsString.withDefault(""));
-  const [supplier, setSupplier] = useQueryState(
-    "supplier",
-    parseAsString.withDefault("all"),
-  );
-  const [status, setStatus] = useQueryState(
-    "status",
-    parseAsString.withDefault("all"),
-  );
-  const [fromDate, setFromDate] = useQueryState(
-    "from",
-    parseAsString.withDefault(""),
-  );
+  const [supplier, setSupplier] = useQueryState("supplier", parseAsString.withDefault("all"));
+  const [status, setStatus] = useQueryState("status", parseAsString.withDefault("all"));
+  const [fromDate, setFromDate] = useQueryState("from", parseAsString.withDefault(""));
   const [toDate, setToDate] = useQueryState("to", parseAsString.withDefault(""));
   const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1));
 
   const params = { q, supplier, status, from: fromDate, to: toDate, page };
+  const exportParams = { q, supplier, status, from: fromDate, to: toDate };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["purchase_orders", params],
     queryFn: () => fetchPurchaseOrders(params),
   });
 
-  const { data: supplierOptions } = useQuery({
-    queryKey: ["suppliers_options"],
-    queryFn: fetchSuppliersOptions,
-  });
-
-  const { data: warehouseOptions } = useQuery({
-    queryKey: ["warehouses_options"],
-    queryFn: fetchWarehousesOptions,
-  });
-
-  const { data: productOptions } = useQuery({
-    queryKey: ["products_po_options"],
-    queryFn: fetchProductsOptions,
-  });
+  const { data: supplierOptions } = useQuery({ queryKey: ["suppliers_options"], queryFn: fetchSuppliersOptions });
+  const { data: warehouseOptions } = useQuery({ queryKey: ["warehouses_options"], queryFn: fetchWarehousesOptions });
+  const { data: productOptions } = useQuery({ queryKey: ["products_po_options"], queryFn: fetchProductsOptions });
 
   const queryClient = useQueryClient();
-
   const [panelOpen, setPanelOpen] = useState(false);
 
   const form = useForm<PurchaseOrderCreateInput>({
@@ -202,15 +199,58 @@ export function PurchaseOrdersPage() {
     },
   });
 
-  const { fields, append, remove } = useFieldArray({
-    control: form.control,
-    name: "lines",
-  });
+  const { fields, append, remove } = useFieldArray({ control: form.control, name: "lines" });
+
+  async function handleExport(rowsOverride?: PurchaseOrderRow[]) {
+    const rows = rowsOverride ?? (await fetchPurchaseOrdersForExport(exportParams));
+
+    const worksheet = buildWorksheet(rows, [
+      { key: "po_number", header: "PO #", type: "string", value: (row: PurchaseOrderRow) => row.po_number },
+      {
+        key: "supplier",
+        header: "Supplier",
+        type: "string",
+        value: (row: PurchaseOrderRow) => row.supplier?.company_name ?? "",
+      },
+      { key: "status", header: "Status", type: "string", value: (row: PurchaseOrderRow) => row.status },
+      { key: "order_date", header: "Order Date", type: "date", value: (row: PurchaseOrderRow) => row.order_date ?? "" },
+      {
+        key: "expected_delivery_date",
+        header: "Expected Delivery",
+        type: "date",
+        value: (row: PurchaseOrderRow) => row.expected_delivery_date ?? "",
+      },
+      {
+        key: "lines",
+        header: "Lines",
+        type: "number",
+        value: (row: PurchaseOrderRow) => (row.purchase_order_lines ?? []).length,
+      },
+      {
+        key: "total_amount",
+        header: "Total Amount",
+        type: "currency",
+        value: (row: PurchaseOrderRow) => row.total_amount,
+      },
+    ]);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Purchase Orders");
+    addMetadataSheet(workbook, {
+      "Export date": formatISODate(new Date()),
+      Filters: `search=${q || ""}; supplier=${supplier}; status=${status}; from=${fromDate || ""}; to=${toDate || ""}`,
+      "Total rows": rows.length,
+      User: profile.name,
+    });
+
+    downloadWorkbook(workbook, `purchase_orders_export_${formatISODate(new Date())}.xlsx`);
+  }
 
   const createMutation = useMutation({
     mutationFn: async (values: PurchaseOrderCreateInput) => {
       const supabase = createClient();
       const parsed = purchaseOrderCreateSchema.parse(values);
+
       const header = {
         supplier_id: parsed.supplier_id,
         warehouse_id: parsed.warehouse_id,
@@ -228,16 +268,14 @@ export function PurchaseOrdersPage() {
         .single();
       if (poError) throw new Error(poError.message);
 
-      const lines = parsed.lines.map((l) => ({
+      const lines = parsed.lines.map((line) => ({
         purchase_order_id: po.id,
-        product_id: l.product_id,
-        qty_ordered: l.qty_ordered,
-        unit_cost: l.unit_cost,
+        product_id: line.product_id,
+        qty_ordered: line.qty_ordered,
+        unit_cost: line.unit_cost,
       }));
 
-      const { error: linesError } = await supabase
-        .from("purchase_order_lines")
-        .insert(lines);
+      const { error: linesError } = await supabase.from("purchase_order_lines").insert(lines);
       if (linesError) throw new Error(linesError.message);
 
       return po.id as string;
@@ -250,42 +288,37 @@ export function PurchaseOrdersPage() {
     },
   });
 
-  const sorting = useMemo<SortingState>(
-    () => [{ id: "created_at", desc: true }],
-    [],
-  );
+  const sorting = useMemo<SortingState>(() => [{ id: "created_at", desc: true }], []);
 
   const columns = useMemo<ColumnDef<PurchaseOrderRow, unknown>[]>(() => {
     return [
       {
         accessorKey: "po_number",
         header: () => "PO #",
-        cell: ({ row }) => (
-          <span className="font-mono text-xs">{row.original.po_number}</span>
-        ),
+        cell: ({ row }) => <span className="font-mono text-xs">{row.original.po_number}</span>,
       },
       {
         id: "supplier",
         header: () => "Supplier",
-        cell: ({ row }) => row.original.supplier?.company_name ?? "—",
+        cell: ({ row }) => row.original.supplier?.company_name ?? "-",
       },
       {
         accessorKey: "status",
         header: () => "Status",
         cell: ({ row }) => {
-          const s = statusBadge(row.original.status);
-          return <StatusBadge label={s.label} variant={s.variant} />;
+          const badge = statusBadge(row.original.status);
+          return <StatusBadge label={badge.label} variant={badge.variant} />;
         },
       },
       {
         accessorKey: "order_date",
         header: () => "Order date",
-        cell: ({ row }) => row.original.order_date ?? "—",
+        cell: ({ row }) => row.original.order_date ?? "-",
       },
       {
         accessorKey: "expected_delivery_date",
         header: () => "Expected",
-        cell: ({ row }) => row.original.expected_delivery_date ?? "—",
+        cell: ({ row }) => row.original.expected_delivery_date ?? "-",
       },
       {
         id: "lines",
@@ -300,13 +333,34 @@ export function PurchaseOrdersPage() {
           return `${currency ? currency + " " : ""}${Number(row.original.total_amount).toFixed(2)}`;
         },
       },
+      {
+        id: "actions",
+        header: () => "",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div onClick={(event) => event.stopPropagation()}>
+            <DropdownMenu>
+              <DropdownMenuTrigger>
+                <Button variant="ghost" size="icon">
+                  <MoreHorizontal className="h-4 w-4" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => void handleExport([row.original])}>
+                  Export row
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        ),
+      },
     ];
   }, []);
 
   const pageCount = Math.ceil((data?.count ?? 0) / PAGE_SIZE) || 1;
 
   const defaultWarehouseId = useMemo(() => {
-    const found = (warehouseOptions ?? []).find((w) => w.code === "DEFAULT");
+    const found = (warehouseOptions ?? []).find((warehouseItem) => warehouseItem.code === "DEFAULT");
     return found?.id ?? (warehouseOptions?.[0]?.id ?? "");
   }, [warehouseOptions]);
 
@@ -334,43 +388,45 @@ export function PurchaseOrdersPage() {
       <FilterBar>
         <div className="flex flex-1 items-center gap-2">
           <Input
-            placeholder="Search by PO number…"
+            placeholder="Search by PO number..."
             value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
+            onChange={(event) => {
+              setQ(event.target.value);
               setPage(1);
             }}
           />
         </div>
+
         <Select
           value={supplier}
-          onValueChange={(v) => {
-            setSupplier(v);
+          onValueChange={(value) => {
+            setSupplier(value);
             setPage(1);
           }}
         >
           <SelectTrigger className="w-full sm:w-64">
-  <SelectValue placeholder="Supplier">
-    {(() => {
-      if (!supplier || supplier === "all") return "All suppliers";
-      const selected = (supplierOptions ?? []).find((s) => s.id === supplier);
-      return selected?.company_name ?? "All suppliers";
-    })()}
-  </SelectValue>
-</SelectTrigger>
+            <SelectValue placeholder="Supplier">
+              {(() => {
+                if (!supplier || supplier === "all") return "All suppliers";
+                const selected = (supplierOptions ?? []).find((option) => option.id === supplier);
+                return selected?.company_name ?? "All suppliers";
+              })()}
+            </SelectValue>
+          </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All suppliers</SelectItem>
-            {(supplierOptions ?? []).map((s) => (
-              <SelectItem key={s.id} value={s.id}>
-                {s.company_name}
+            {(supplierOptions ?? []).map((option) => (
+              <SelectItem key={option.id} value={option.id}>
+                {option.company_name}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+
         <Select
           value={status}
-          onValueChange={(v) => {
-            setStatus(v);
+          onValueChange={(value) => {
+            setStatus(value);
             setPage(1);
           }}
         >
@@ -386,11 +442,12 @@ export function PurchaseOrdersPage() {
             <SelectItem value="cancelled">Cancelled</SelectItem>
           </SelectContent>
         </Select>
+
         <Input
           type="date"
           value={fromDate}
-          onChange={(e) => {
-            setFromDate(e.target.value);
+          onChange={(event) => {
+            setFromDate(event.target.value);
             setPage(1);
           }}
           className="w-full sm:w-44"
@@ -398,92 +455,80 @@ export function PurchaseOrdersPage() {
         <Input
           type="date"
           value={toDate}
-          onChange={(e) => {
-            setToDate(e.target.value);
+          onChange={(event) => {
+            setToDate(event.target.value);
             setPage(1);
           }}
           className="w-full sm:w-44"
         />
       </FilterBar>
 
-      {error ? (
-        <div className="rounded-md border p-4 text-sm text-destructive">
-          {(error as Error).message}
-        </div>
-      ) : null}
+      {error ? <div className="rounded-md border p-4 text-sm text-destructive">{(error as Error).message}</div> : null}
 
       <DataTable
         columns={columns}
         data={data?.rows ?? []}
         isLoading={isLoading}
         sorting={sorting}
+        toolbar={
+          <Button variant="secondary" onClick={() => void handleExport()}>
+            Export to Excel
+          </Button>
+        }
         onSortingChange={() => {}}
         pageIndex={Math.max(page - 1, 0)}
         pageCount={pageCount}
-        onPageChange={(idx) => setPage(idx + 1)}
+        onPageChange={(index) => setPage(index + 1)}
         onRowClick={(row) => router.push(`/purchase-orders/${row.id}`)}
       />
 
-      <SlideOverPanel
-        open={panelOpen}
-        onOpenChange={setPanelOpen}
-        title="New purchase order"
-      >
-        <form
-          className="space-y-4"
-          onSubmit={form.handleSubmit((values) => createMutation.mutate(values))}
-        >
+      <SlideOverPanel open={panelOpen} onOpenChange={setPanelOpen} title="New purchase order">
+        <form className="space-y-4" onSubmit={form.handleSubmit((values) => createMutation.mutate(values))}>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <FormField
-              label="Supplier"
-              error={form.formState.errors.supplier_id?.message}
-            >
+            <FormField label="Supplier" error={form.formState.errors.supplier_id?.message}>
               <Select
                 value={form.watch("supplier_id")}
-                onValueChange={(v) => form.setValue("supplier_id", v ?? "")}
+                onValueChange={(value) => form.setValue("supplier_id", value ?? "")}
               >
                 <SelectTrigger>
-  <SelectValue placeholder="Select supplier">
-    {(() => {
-      const value = form.watch("supplier_id");
-      if (!value) return "Select supplier";
-      const selected = (supplierOptions ?? []).find((s) => s.id === value);
-      return selected?.company_name ?? "Select supplier";
-    })()}
-  </SelectValue>
-</SelectTrigger>
+                  <SelectValue placeholder="Select supplier">
+                    {(() => {
+                      const value = form.watch("supplier_id");
+                      if (!value) return "Select supplier";
+                      const selected = (supplierOptions ?? []).find((option) => option.id === value);
+                      return selected?.company_name ?? "Select supplier";
+                    })()}
+                  </SelectValue>
+                </SelectTrigger>
                 <SelectContent>
-                  {(supplierOptions ?? []).map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.company_name}
+                  {(supplierOptions ?? []).map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      {option.company_name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </FormField>
 
-            <FormField
-              label="Warehouse"
-              error={form.formState.errors.warehouse_id?.message}
-            >
+            <FormField label="Warehouse" error={form.formState.errors.warehouse_id?.message}>
               <Select
                 value={form.watch("warehouse_id")}
-                onValueChange={(v) => form.setValue("warehouse_id", v ?? "")}
+                onValueChange={(value) => form.setValue("warehouse_id", value ?? "")}
               >
                 <SelectTrigger>
-  <SelectValue placeholder="Select warehouse">
-    {(() => {
-      const value = form.watch("warehouse_id");
-      if (!value) return "Select warehouse";
-      const selected = (warehouseOptions ?? []).find((w) => w.id === value);
-      return selected?.name ?? "Select warehouse";
-    })()}
-  </SelectValue>
-</SelectTrigger>
+                  <SelectValue placeholder="Select warehouse">
+                    {(() => {
+                      const value = form.watch("warehouse_id");
+                      if (!value) return "Select warehouse";
+                      const selected = (warehouseOptions ?? []).find((item) => item.id === value);
+                      return selected?.name ?? "Select warehouse";
+                    })()}
+                  </SelectValue>
+                </SelectTrigger>
                 <SelectContent>
-                  {(warehouseOptions ?? []).map((w) => (
-                    <SelectItem key={w.id} value={w.id}>
-                      {w.name}
+                  {(warehouseOptions ?? []).map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -496,16 +541,14 @@ export function PurchaseOrdersPage() {
               <Input
                 type="date"
                 value={form.watch("order_date") ?? ""}
-                onChange={(e) => form.setValue("order_date", e.target.value)}
+                onChange={(event) => form.setValue("order_date", event.target.value)}
               />
             </FormField>
             <FormField label="Expected delivery">
               <Input
                 type="date"
                 value={form.watch("expected_delivery_date") ?? ""}
-                onChange={(e) =>
-                  form.setValue("expected_delivery_date", e.target.value)
-                }
+                onChange={(event) => form.setValue("expected_delivery_date", event.target.value)}
               />
             </FormField>
           </div>
@@ -524,67 +567,65 @@ export function PurchaseOrdersPage() {
               const productIdPath = `lines.${index}.product_id` as const;
               const qtyPath = `lines.${index}.qty_ordered` as const;
               const unitCostPath = `lines.${index}.unit_cost` as const;
-
               const selectedProductId = form.watch(productIdPath);
 
               return (
                 <div key={field.id} className="space-y-3 rounded-md border p-3">
                   <div className="space-y-3">
-  <FormField
-    label="Product"
-    error={form.formState.errors.lines?.[index]?.product_id?.message}
-  >
-    <Select
-      value={selectedProductId}
-      onValueChange={(v) => {
-        form.setValue(productIdPath, v ?? "");
-        const opt = (productOptions ?? []).find((p) => p.id === (v ?? ""));
-        if (opt) {
-          const current = form.getValues(unitCostPath);
-          if (!current || Number(current) === 0) {
-            form.setValue(unitCostPath, opt.unit_cost);
-          }
-        }
-      }}
-    >
-      <SelectTrigger className="w-full">
-        <SelectValue placeholder="Select product">
-          {(() => {
-            if (!selectedProductId) return "Select product";
-            const selected = (productOptions ?? []).find(
-              (p) => p.id === selectedProductId,
-            );
-            return selected ? `${selected.name} (${selected.sku})` : "Select product";
-          })()}
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        {(productOptions ?? []).map((p) => (
-          <SelectItem key={p.id} value={p.id}>
-            {p.name} ({p.sku})
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  </FormField>
+                    <FormField
+                      label="Product"
+                      error={form.formState.errors.lines?.[index]?.product_id?.message}
+                    >
+                      <Select
+                        value={selectedProductId}
+                        onValueChange={(value) => {
+                          form.setValue(productIdPath, value ?? "");
+                          const selected = (productOptions ?? []).find((item) => item.id === (value ?? ""));
+                          if (selected) {
+                            const current = form.getValues(unitCostPath);
+                            if (!current || Number(current) === 0) {
+                              form.setValue(unitCostPath, selected.unit_cost);
+                            }
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select product">
+                            {(() => {
+                              if (!selectedProductId) return "Select product";
+                              const selected = (productOptions ?? []).find((item) => item.id === selectedProductId);
+                              return selected ? `${selected.name} (${selected.sku})` : "Select product";
+                            })()}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(productOptions ?? []).map((item) => (
+                            <SelectItem key={item.id} value={item.id}>
+                              {item.name} ({item.sku})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FormField>
 
-  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-    <FormField
-      label="Qty"
-      error={form.formState.errors.lines?.[index]?.qty_ordered?.message}
-    >
-      <Input type="number" step="0.001" {...form.register(qtyPath)} />
-    </FormField>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <FormField
+                        label="Qty"
+                        error={form.formState.errors.lines?.[index]?.qty_ordered?.message}
+                      >
+                        <Input type="number" step="0.001" {...form.register(qtyPath)} />
+                      </FormField>
 
-    <FormField
-      label="Unit cost"
-      error={form.formState.errors.lines?.[index]?.unit_cost?.message}
-    >
-      <Input type="number" step="0.01" {...form.register(unitCostPath)} />
-    </FormField>
-  </div>
-</div>
-<div className="flex justify-end">
+                      <FormField
+                        label="Unit cost"
+                        error={form.formState.errors.lines?.[index]?.unit_cost?.message}
+                      >
+                        <Input type="number" step="0.01" {...form.register(unitCostPath)} />
+                      </FormField>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end">
                     <Button
                       type="button"
                       variant="secondary"
@@ -618,11 +659,7 @@ export function PurchaseOrdersPage() {
             <Button type="submit" disabled={createMutation.isPending}>
               Create PO
             </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setPanelOpen(false)}
-            >
+            <Button type="button" variant="secondary" onClick={() => setPanelOpen(false)}>
               Cancel
             </Button>
           </div>
@@ -631,7 +668,4 @@ export function PurchaseOrdersPage() {
     </div>
   );
 }
-
-
-
 

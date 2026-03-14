@@ -4,12 +4,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ColumnDef, type SortingState } from "@tanstack/react-table";
 import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
+import * as XLSX from "xlsx";
+import { MoreHorizontal } from "lucide-react";
 
 import { useProfile } from "@/components/app/profile-context";
-import { PageHeader } from "@/components/shared/page-header";
-import { FilterBar } from "@/components/shared/filter-bar";
 import { DataTable } from "@/components/shared/data-table";
+import { FilterBar } from "@/components/shared/filter-bar";
 import { FormField } from "@/components/shared/form-field";
+import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,6 +21,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -27,6 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { addMetadataSheet, buildWorksheet, downloadWorkbook, formatISODate } from "@/lib/excel";
 import { canWrite } from "@/lib/permissions";
 import { createClient } from "@/lib/supabase/browser";
 
@@ -54,19 +63,14 @@ type InventoryQueryParams = {
 };
 
 function stockStatus(qtyOnHand: number) {
-  if (qtyOnHand <= 0)
-    return { label: "Out of Stock", variant: "destructive" as const };
-  if (qtyOnHand < LOW_STOCK_THRESHOLD)
-    return { label: "Low Stock", variant: "outline" as const };
+  if (qtyOnHand <= 0) return { label: "Out of Stock", variant: "destructive" as const };
+  if (qtyOnHand < LOW_STOCK_THRESHOLD) return { label: "Low Stock", variant: "outline" as const };
   return { label: "In Stock", variant: "secondary" as const };
 }
 
 async function fetchWarehouses() {
   const supabase = createClient();
-  const { data, error } = await supabase
-    .from("warehouses")
-    .select("id,name,code")
-    .order("name", { ascending: true });
+  const { data, error } = await supabase.from("warehouses").select("id,name,code").order("name", { ascending: true });
   if (error) throw new Error(error.message);
   return (data ?? []) as WarehouseOption[];
 }
@@ -86,9 +90,7 @@ async function fetchInventory(params: InventoryQueryParams) {
     query = query.or(`products.name.ilike.%${q}%,products.sku.ilike.%${q}%`);
   }
 
-  if (params.warehouse !== "all") {
-    query = query.eq("warehouse_id", params.warehouse);
-  }
+  if (params.warehouse !== "all") query = query.eq("warehouse_id", params.warehouse);
 
   if (params.status === "out") {
     query = query.eq("qty_on_hand", 0);
@@ -101,13 +103,40 @@ async function fetchInventory(params: InventoryQueryParams) {
   const from = (params.page - 1) * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1;
 
-  const { data, count, error } = await query
-    .order("qty_on_hand", { ascending: false })
-    .range(from, to);
-
+  const { data, count, error } = await query.order("qty_on_hand", { ascending: false }).range(from, to);
   if (error) throw new Error(error.message);
 
   return { rows: (data ?? []) as unknown as InventoryRow[], count: count ?? 0 };
+}
+
+async function fetchInventoryForExport(params: Omit<InventoryQueryParams, "page">) {
+  const supabase = createClient();
+
+  let query = supabase
+    .from("inventory")
+    .select(
+      "id,qty_on_hand,qty_reserved,qty_on_order,product_id,warehouse_id,product:products(id,sku,name),warehouse:warehouses(id,name,code)",
+    );
+
+  if (params.q.trim()) {
+    const q = params.q.trim();
+    query = query.or(`products.name.ilike.%${q}%,products.sku.ilike.%${q}%`);
+  }
+
+  if (params.warehouse !== "all") query = query.eq("warehouse_id", params.warehouse);
+
+  if (params.status === "out") {
+    query = query.eq("qty_on_hand", 0);
+  } else if (params.status === "low") {
+    query = query.gt("qty_on_hand", 0).lt("qty_on_hand", LOW_STOCK_THRESHOLD);
+  } else if (params.status === "in") {
+    query = query.gte("qty_on_hand", LOW_STOCK_THRESHOLD);
+  }
+
+  const { data, error } = await query.order("qty_on_hand", { ascending: false });
+  if (error) throw new Error(error.message);
+
+  return (data ?? []) as unknown as InventoryRow[];
 }
 
 export function InventoryPage() {
@@ -115,22 +144,15 @@ export function InventoryPage() {
   const writable = canWrite(profile.role);
 
   const [q, setQ] = useQueryState("q", parseAsString.withDefault(""));
-  const [warehouse, setWarehouse] = useQueryState(
-    "warehouse",
-    parseAsString.withDefault("all"),
-  );
-  const [status, setStatus] = useQueryState(
-    "status",
-    parseAsString.withDefault("all"),
-  );
+  const [warehouse, setWarehouse] = useQueryState("warehouse", parseAsString.withDefault("all"));
+  const [status, setStatus] = useQueryState("status", parseAsString.withDefault("all"));
   const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1));
 
-  const { data: warehouses } = useQuery({
-    queryKey: ["warehouses"],
-    queryFn: fetchWarehouses,
-  });
+  const { data: warehouses } = useQuery({ queryKey: ["warehouses"], queryFn: fetchWarehouses });
 
   const params = { q, warehouse, status, page };
+  const exportParams = { q, warehouse, status };
+
   const { data, isLoading, error } = useQuery({
     queryKey: ["inventory", params],
     queryFn: () => fetchInventory(params),
@@ -140,8 +162,38 @@ export function InventoryPage() {
 
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustRow, setAdjustRow] = useState<InventoryRow | null>(null);
-  const [newQty, setNewQty] = useState<string>("");
-  const [reason, setReason] = useState<string>("");
+  const [newQty, setNewQty] = useState("");
+  const [reason, setReason] = useState("");
+
+  async function handleExport(rowsOverride?: InventoryRow[]) {
+    const rows = rowsOverride ?? (await fetchInventoryForExport(exportParams));
+
+    const worksheet = buildWorksheet(rows, [
+      { key: "sku", header: "SKU", type: "string", value: (row: InventoryRow) => row.product?.sku ?? "" },
+      { key: "product", header: "Product", type: "string", value: (row: InventoryRow) => row.product?.name ?? "" },
+      { key: "warehouse", header: "Warehouse", type: "string", value: (row: InventoryRow) => row.warehouse?.name ?? "" },
+      {
+        key: "warehouse_code",
+        header: "Warehouse Code",
+        type: "string",
+        value: (row: InventoryRow) => row.warehouse?.code ?? "",
+      },
+      { key: "qty_on_hand", header: "On Hand", type: "number", value: (row: InventoryRow) => row.qty_on_hand },
+      { key: "qty_reserved", header: "Reserved", type: "number", value: (row: InventoryRow) => row.qty_reserved },
+      { key: "qty_on_order", header: "On Order", type: "number", value: (row: InventoryRow) => row.qty_on_order },
+    ]);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Inventory");
+    addMetadataSheet(workbook, {
+      "Export date": formatISODate(new Date()),
+      Filters: `search=${q || ""}; warehouse=${warehouse}; status=${status}`,
+      "Total rows": rows.length,
+      User: profile.name,
+    });
+
+    downloadWorkbook(workbook, `inventory_export_${formatISODate(new Date())}.xlsx`);
+  }
 
   const adjustMutation = useMutation({
     mutationFn: async () => {
@@ -164,10 +216,7 @@ export function InventoryPage() {
     },
   });
 
-  const sorting = useMemo<SortingState>(
-    () => [{ id: "qty_on_hand", desc: true }],
-    [],
-  );
+  const sorting = useMemo<SortingState>(() => [{ id: "qty_on_hand", desc: true }], []);
 
   const columns = useMemo<ColumnDef<InventoryRow, unknown>[]>(() => {
     return [
@@ -176,19 +225,15 @@ export function InventoryPage() {
         header: () => "Product",
         cell: ({ row }) => (
           <div className="space-y-0.5">
-            <div className="text-sm font-medium">
-              {row.original.product?.name ?? "—"}
-            </div>
-            <div className="font-mono text-xs text-muted-foreground">
-              {row.original.product?.sku ?? ""}
-            </div>
+            <div className="text-sm font-medium">{row.original.product?.name ?? "-"}</div>
+            <div className="font-mono text-xs text-muted-foreground">{row.original.product?.sku ?? ""}</div>
           </div>
         ),
       },
       {
         id: "warehouse",
         header: () => "Warehouse",
-        cell: ({ row }) => row.original.warehouse?.name ?? "—",
+        cell: ({ row }) => row.original.warehouse?.name ?? "-",
       },
       {
         accessorKey: "qty_on_hand",
@@ -208,41 +253,49 @@ export function InventoryPage() {
       {
         id: "available",
         header: () => "Available",
-        cell: ({ row }) => {
-          const available =
-            Number(row.original.qty_on_hand) - Number(row.original.qty_reserved);
-          return available.toFixed(3);
-        },
+        cell: ({ row }) =>
+          (Number(row.original.qty_on_hand) - Number(row.original.qty_reserved)).toFixed(3),
       },
       {
         id: "status",
         header: () => "Status",
         cell: ({ row }) => {
-          const s = stockStatus(Number(row.original.qty_on_hand));
-          return <StatusBadge label={s.label} variant={s.variant} />;
+          const stock = stockStatus(Number(row.original.qty_on_hand));
+          return <StatusBadge label={stock.label} variant={stock.variant} />;
         },
       },
       {
         id: "actions",
         header: () => "",
-        cell: ({ row }) => {
-          if (!writable) return null;
-          return (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                setAdjustRow(row.original);
-                setNewQty(String(row.original.qty_on_hand));
-                setReason("");
-                setAdjustOpen(true);
-              }}
-            >
-              Adjust
-            </Button>
-          );
-        },
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div onClick={(event) => event.stopPropagation()}>
+            <DropdownMenu>
+              <DropdownMenuTrigger>
+                <Button variant="ghost" size="icon">
+                  <MoreHorizontal className="h-4 w-4" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => void handleExport([row.original])}>
+                  Export row
+                </DropdownMenuItem>
+                {writable ? (
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setAdjustRow(row.original);
+                      setNewQty(String(row.original.qty_on_hand));
+                      setReason("");
+                      setAdjustOpen(true);
+                    }}
+                  >
+                    Adjust
+                  </DropdownMenuItem>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        ),
       },
     ];
   }, [writable]);
@@ -251,64 +304,63 @@ export function InventoryPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Inventory"
-        subtitle="View stock levels across products and warehouses."
-      />
+      <PageHeader title="Inventory" subtitle="View stock levels across products and warehouses." />
 
       <FilterBar>
         <div className="flex flex-1 items-center gap-2">
           <Input
-            placeholder="Search by product name or SKU…"
+            placeholder="Search by product name or SKU..."
             value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
+            onChange={(event) => {
+              setQ(event.target.value);
               setPage(1);
             }}
           />
         </div>
+
         <Select
           value={warehouse}
-          onValueChange={(v) => {
-            setWarehouse(v);
+          onValueChange={(value) => {
+            setWarehouse(value);
             setPage(1);
           }}
         >
           <SelectTrigger className="w-full sm:w-56">
             <SelectValue placeholder="Warehouse">
-  {(value) => {
-    if (!value || value === "all") return "All warehouses";
-    const selected = (warehouses ?? []).find((w) => w.id === value);
-    return selected?.name ?? String(value);
-  }}
-</SelectValue>
+              {(value) => {
+                if (!value || value === "all") return "All warehouses";
+                const selected = (warehouses ?? []).find((item) => item.id === value);
+                return selected?.name ?? String(value);
+              }}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All warehouses</SelectItem>
-            {(warehouses ?? []).map((w) => (
-              <SelectItem key={w.id} value={w.id}>
-                {w.name}
+            {(warehouses ?? []).map((item) => (
+              <SelectItem key={item.id} value={item.id}>
+                {item.name}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+
         <Select
           value={status}
-          onValueChange={(v) => {
-            setStatus(v);
+          onValueChange={(value) => {
+            setStatus(value);
             setPage(1);
           }}
         >
           <SelectTrigger className="w-full sm:w-44">
             <SelectValue placeholder="Status">
-  {(value) => {
-    if (!value || value === "all") return "All";
-    if (value === "in") return "In stock";
-    if (value === "low") return "Low stock";
-    if (value === "out") return "Out of stock";
-    return String(value);
-  }}
-</SelectValue>
+              {(value) => {
+                if (!value || value === "all") return "All";
+                if (value === "in") return "In stock";
+                if (value === "low") return "Low stock";
+                if (value === "out") return "Out of stock";
+                return String(value);
+              }}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All</SelectItem>
@@ -319,28 +371,29 @@ export function InventoryPage() {
         </Select>
       </FilterBar>
 
-      {error ? (
-        <div className="rounded-md border p-4 text-sm text-destructive">
-          {(error as Error).message}
-        </div>
-      ) : null}
+      {error ? <div className="rounded-md border p-4 text-sm text-destructive">{(error as Error).message}</div> : null}
 
       <DataTable
         columns={columns}
         data={data?.rows ?? []}
         isLoading={isLoading}
         sorting={sorting}
+        toolbar={
+          <Button variant="secondary" onClick={() => void handleExport()}>
+            Export to Excel
+          </Button>
+        }
         onSortingChange={() => {}}
         pageIndex={Math.max(page - 1, 0)}
         pageCount={pageCount}
-        onPageChange={(idx) => setPage(idx + 1)}
+        onPageChange={(index) => setPage(index + 1)}
       />
 
       <Dialog
         open={adjustOpen}
-        onOpenChange={(o) => {
-          setAdjustOpen(o);
-          if (!o) setAdjustRow(null);
+        onOpenChange={(open) => {
+          setAdjustOpen(open);
+          if (!open) setAdjustRow(null);
         }}
       >
         <DialogContent>
@@ -354,16 +407,11 @@ export function InventoryPage() {
             </div>
 
             <FormField label="New quantity">
-              <Input
-                type="number"
-                step="0.001"
-                value={newQty}
-                onChange={(e) => setNewQty(e.target.value)}
-              />
+              <Input type="number" step="0.001" value={newQty} onChange={(event) => setNewQty(event.target.value)} />
             </FormField>
 
             <FormField label="Reason">
-              <Input value={reason} onChange={(e) => setReason(e.target.value)} />
+              <Input value={reason} onChange={(event) => setReason(event.target.value)} />
             </FormField>
 
             {adjustMutation.error ? (
@@ -377,10 +425,7 @@ export function InventoryPage() {
             <Button variant="secondary" onClick={() => setAdjustOpen(false)}>
               Cancel
             </Button>
-            <Button
-              onClick={() => adjustMutation.mutate()}
-              disabled={adjustMutation.isPending || !newQty}
-            >
+            <Button onClick={() => adjustMutation.mutate()} disabled={adjustMutation.isPending || !newQty}>
               Save
             </Button>
           </DialogFooter>
@@ -389,3 +434,4 @@ export function InventoryPage() {
     </div>
   );
 }
+

@@ -1,12 +1,20 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import * as XLSX from "xlsx";
+import { MoreHorizontal } from "lucide-react";
 
 import { useProfile } from "@/components/app/profile-context";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -15,6 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { addMetadataSheet, buildWorksheet, downloadWorkbook, formatISODate } from "@/lib/excel";
 import { canWrite } from "@/lib/permissions";
 import { createClient } from "@/lib/supabase/browser";
 
@@ -68,11 +77,7 @@ async function fetchPurchaseOrder(id: string): Promise<PurchaseOrderDetail> {
   };
 }
 
-export function PurchaseOrderDetailPage({
-  purchaseOrderId,
-}: {
-  purchaseOrderId: string;
-}) {
+export function PurchaseOrderDetailPage({ purchaseOrderId }: { purchaseOrderId: string }) {
   const profile = useProfile();
   const writable = canWrite(profile.role);
   const router = useRouter();
@@ -86,16 +91,11 @@ export function PurchaseOrderDetailPage({
   const statusMutation = useMutation({
     mutationFn: async (status: string) => {
       const supabase = createClient();
-      const { error } = await supabase
-        .from("purchase_orders")
-        .update({ status })
-        .eq("id", purchaseOrderId);
+      const { error } = await supabase.from("purchase_orders").update({ status }).eq("id", purchaseOrderId);
       if (error) throw new Error(error.message);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["purchase_order", purchaseOrderId],
-      });
+      await queryClient.invalidateQueries({ queryKey: ["purchase_order", purchaseOrderId] });
       await queryClient.invalidateQueries({ queryKey: ["purchase_orders"] });
     },
   });
@@ -109,13 +109,37 @@ export function PurchaseOrderDetailPage({
       if (error) throw new Error(error.message);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["purchase_order", purchaseOrderId],
-      });
+      await queryClient.invalidateQueries({ queryKey: ["purchase_order", purchaseOrderId] });
       await queryClient.invalidateQueries({ queryKey: ["purchase_orders"] });
       await queryClient.invalidateQueries({ queryKey: ["inventory"] });
     },
   });
+
+  async function handleExport(linesOverride?: PurchaseOrderDetail["lines"]) {
+    const lines = linesOverride ?? (data?.lines ?? []);
+
+    const worksheet = buildWorksheet(lines, [
+      { key: "sku", header: "SKU", type: "string", value: (line: any) => line.product?.sku ?? "" },
+      { key: "product", header: "Product", type: "string", value: (line: any) => line.product?.name ?? "" },
+      { key: "qty_ordered", header: "Qty Ordered", type: "number", value: (line: any) => line.qty_ordered },
+      { key: "qty_received", header: "Qty Received", type: "number", value: (line: any) => line.qty_received },
+      { key: "unit_cost", header: "Unit Cost", type: "currency", value: (line: any) => line.unit_cost },
+      { key: "line_total", header: "Line Total", type: "currency", value: (line: any) => line.line_total },
+    ]);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "PO Lines");
+    addMetadataSheet(workbook, {
+      "Export date": formatISODate(new Date()),
+      "PO number": data?.po_number ?? "",
+      Supplier: data?.supplier?.company_name ?? "",
+      Warehouse: data?.warehouse?.name ?? "",
+      "Total rows": lines.length,
+      User: profile.name,
+    });
+
+    downloadWorkbook(workbook, `po_lines_export_${formatISODate(new Date())}.xlsx`);
+  }
 
   const status = data?.status ?? "";
   const badge = statusBadge(status);
@@ -124,62 +148,44 @@ export function PurchaseOrderDetailPage({
     <div className="space-y-6">
       <PageHeader
         title={data ? `Purchase Order ${data.po_number}` : "Purchase Order"}
-        subtitle={
-          data
-            ? `${data.supplier?.company_name ?? ""} · ${data.warehouse?.name ?? ""}`
-            : undefined
-        }
+        subtitle={data ? `${data.supplier?.company_name ?? ""} · ${data.warehouse?.name ?? ""}` : undefined}
         actions={
-          <Button
-            variant="secondary"
-            onClick={() => router.push("/purchase-orders")}
-          >
-            Back
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={() => void handleExport()}>
+              Export to Excel
+            </Button>
+            <Button variant="secondary" onClick={() => router.push("/purchase-orders")}>Back</Button>
+          </div>
         }
       />
 
-      {error ? (
-        <div className="rounded-md border p-4 text-sm text-destructive">
-          {(error as Error).message}
-        </div>
-      ) : null}
+      {error ? <div className="rounded-md border p-4 text-sm text-destructive">{(error as Error).message}</div> : null}
 
       {isLoading || !data ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
+        <div className="text-sm text-muted-foreground">Loading...</div>
       ) : (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge label={badge.label} variant={badge.variant} />
             <div className="text-sm text-muted-foreground">
-              Order date: {data.order_date ?? "—"} · Expected:{" "}
-              {data.expected_delivery_date ?? "—"}
+              Order date: {data.order_date ?? "-"} · Expected: {data.expected_delivery_date ?? "-"}
             </div>
           </div>
 
           {writable ? (
             <div className="flex flex-wrap gap-2">
               {status === "draft" ? (
-                <Button
-                  onClick={() => statusMutation.mutate("sent")}
-                  disabled={statusMutation.isPending}
-                >
+                <Button onClick={() => statusMutation.mutate("sent")} disabled={statusMutation.isPending}>
                   Mark sent
                 </Button>
               ) : null}
               {status === "sent" ? (
-                <Button
-                  onClick={() => statusMutation.mutate("confirmed")}
-                  disabled={statusMutation.isPending}
-                >
+                <Button onClick={() => statusMutation.mutate("confirmed")} disabled={statusMutation.isPending}>
                   Mark confirmed
                 </Button>
               ) : null}
               {status === "confirmed" || status === "partially_received" ? (
-                <Button
-                  onClick={() => receiveMutation.mutate()}
-                  disabled={receiveMutation.isPending}
-                >
+                <Button onClick={() => receiveMutation.mutate()} disabled={receiveMutation.isPending}>
                   Mark received
                 </Button>
               ) : null}
@@ -201,33 +207,42 @@ export function PurchaseOrderDetailPage({
                   <TableHead>Qty received</TableHead>
                   <TableHead>Unit cost</TableHead>
                   <TableHead>Line total</TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.lines.map((l) => (
-                  <TableRow key={l.id}>
+                {data.lines.map((line) => (
+                  <TableRow key={line.id}>
                     <TableCell>
                       <div className="space-y-0.5">
-                        <div className="text-sm font-medium">
-                          {l.product?.name ?? "—"}
-                        </div>
-                        <div className="font-mono text-xs text-muted-foreground">
-                          {l.product?.sku ?? ""}
-                        </div>
+                        <div className="text-sm font-medium">{line.product?.name ?? "-"}</div>
+                        <div className="font-mono text-xs text-muted-foreground">{line.product?.sku ?? ""}</div>
                       </div>
                     </TableCell>
-                    <TableCell>{Number(l.qty_ordered).toFixed(3)}</TableCell>
-                    <TableCell>{Number(l.qty_received).toFixed(3)}</TableCell>
-                    <TableCell>{Number(l.unit_cost).toFixed(2)}</TableCell>
-                    <TableCell>{Number(l.line_total).toFixed(2)}</TableCell>
+                    <TableCell>{Number(line.qty_ordered).toFixed(3)}</TableCell>
+                    <TableCell>{Number(line.qty_received).toFixed(3)}</TableCell>
+                    <TableCell>{Number(line.unit_cost).toFixed(2)}</TableCell>
+                    <TableCell>{Number(line.line_total).toFixed(2)}</TableCell>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger>
+                          <Button variant="ghost" size="icon">
+                            <MoreHorizontal className="h-4 w-4" aria-hidden />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => void handleExport([line])}>
+                            Export row
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
                   </TableRow>
                 ))}
+
                 {data.lines.length === 0 ? (
                   <TableRow>
-                    <TableCell
-                      colSpan={5}
-                      className="h-24 text-center text-sm text-muted-foreground"
-                    >
+                    <TableCell colSpan={6} className="h-24 text-center text-sm text-muted-foreground">
                       No line items.
                     </TableCell>
                   </TableRow>
@@ -239,8 +254,7 @@ export function PurchaseOrderDetailPage({
           <div className="flex items-center justify-end text-sm">
             <div className="text-muted-foreground">Total:</div>
             <div className="ml-2 font-medium">
-              {(data.currency ? data.currency + " " : "") +
-                Number(data.total_amount).toFixed(2)}
+              {(data.currency ? data.currency + " " : "") + Number(data.total_amount).toFixed(2)}
             </div>
           </div>
         </div>
@@ -248,3 +262,5 @@ export function PurchaseOrderDetailPage({
     </div>
   );
 }
+
+

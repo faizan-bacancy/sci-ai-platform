@@ -38,6 +38,7 @@ export function DataTable<TData>({
   onRowClick,
   emptyMessage = "No results.",
   className,
+  toolbar,
 }: {
   columns: ColumnDef<TData, unknown>[];
   data: TData[];
@@ -52,6 +53,7 @@ export function DataTable<TData>({
   onRowClick?: (row: TData) => void;
   emptyMessage?: string;
   className?: string;
+  toolbar?: React.ReactNode;
 }) {
   const selectable = !!onRowSelectionChange;
 
@@ -73,6 +75,7 @@ export function DataTable<TData>({
 
   return (
     <div className={cn("space-y-3", className)}>
+      {toolbar ? <div className="flex flex-wrap items-center justify-between gap-2">{toolbar}</div> : null}
       <div className="rounded-md border">
         <Table>
           <TableHeader>

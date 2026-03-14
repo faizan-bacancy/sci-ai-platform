@@ -2,20 +2,26 @@
 
 /* eslint-disable react-hooks/incompatible-library */
 
+import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import * as XLSX from "xlsx";
+import { MoreHorizontal } from "lucide-react";
 
-import { createClient } from "@/lib/supabase/browser";
 import { useProfile } from "@/components/app/profile-context";
-import { canDelete, canWrite } from "@/lib/permissions";
-import { PageHeader } from "@/components/shared/page-header";
-import { FormField } from "@/components/shared/form-field";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { FormField } from "@/components/shared/form-field";
+import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -27,6 +33,9 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { addMetadataSheet, buildWorksheet, downloadWorkbook, formatISODate } from "@/lib/excel";
+import { canDelete, canWrite } from "@/lib/permissions";
+import { createClient } from "@/lib/supabase/browser";
 
 import {
   supplierFormSchema,
@@ -55,11 +64,7 @@ type ProductOption = { id: string; sku: string; name: string };
 
 async function fetchSupplier(id: string) {
   const supabase = createClient();
-  const { data, error } = await supabase
-    .from("suppliers")
-    .select("*")
-    .eq("id", id)
-    .single();
+  const { data, error } = await supabase.from("suppliers").select("*").eq("id", id).single();
   if (error) throw new Error(error.message);
   return data as SupplierDetail;
 }
@@ -131,6 +136,66 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
       : undefined,
   });
 
+  async function handleExportLinks(rowsOverride?: SupplierProductRow[]) {
+    const rows = rowsOverride ?? (links ?? []);
+
+    const worksheet = buildWorksheet(rows, [
+      {
+        key: "product_name",
+        header: "Product",
+        type: "string",
+        value: (row: SupplierProductRow) => row.product?.name ?? "",
+      },
+      {
+        key: "sku",
+        header: "SKU",
+        type: "string",
+        value: (row: SupplierProductRow) => row.product?.sku ?? "",
+      },
+      {
+        key: "supplier_sku",
+        header: "Supplier SKU",
+        type: "string",
+        value: (row: SupplierProductRow) => row.supplier_sku ?? "",
+      },
+      {
+        key: "unit_cost",
+        header: "Unit Cost",
+        type: "currency",
+        value: (row: SupplierProductRow) => row.unit_cost,
+      },
+      {
+        key: "lead_time_days",
+        header: "Lead Time (days)",
+        type: "number",
+        value: (row: SupplierProductRow) => row.lead_time_days,
+      },
+      {
+        key: "minimum_order_quantity",
+        header: "MOQ",
+        type: "number",
+        value: (row: SupplierProductRow) => row.minimum_order_quantity,
+      },
+      {
+        key: "is_preferred",
+        header: "Preferred",
+        type: "string",
+        value: (row: SupplierProductRow) => (row.is_preferred ? "Yes" : "No"),
+      },
+    ]);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Supplier Products");
+    addMetadataSheet(workbook, {
+      "Export date": formatISODate(new Date()),
+      Supplier: supplier?.company_name ?? "",
+      "Total rows": rows.length,
+      User: profile.name,
+    });
+
+    downloadWorkbook(workbook, `supplier_products_export_${formatISODate(new Date())}.xlsx`);
+  }
+
   const updateMutation = useMutation({
     mutationFn: async (values: SupplierFormInput) => {
       const supabase = createClient();
@@ -147,10 +212,7 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
         notes: parsed.notes ? values.notes : null,
         rating: parsed.rating ?? null,
       };
-      const { error } = await supabase
-        .from("suppliers")
-        .update(payload)
-        .eq("id", supplierId);
+      const { error } = await supabase.from("suppliers").update(payload).eq("id", supplierId);
       if (error) throw new Error(error.message);
     },
     onSuccess: async () => {
@@ -172,8 +234,7 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
   });
 
   const [confirmOpen, setConfirmOpen] = useState(false);
-
-  const [addProductId, setAddProductId] = useState<string>("");
+  const [addProductId, setAddProductId] = useState("");
 
   const addLinkMutation = useMutation({
     mutationFn: async () => {
@@ -220,7 +281,7 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
   });
 
   const linkedProductIds = useMemo(
-    () => new Set((links ?? []).map((l) => l.product_id)),
+    () => new Set((links ?? []).map((link) => link.product_id)),
     [links],
   );
 
@@ -231,9 +292,10 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
         subtitle={supplier ? `Supplier ID: ${supplier.id}` : undefined}
         actions={
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => router.push("/suppliers")}>
-              Back
+            <Button variant="secondary" onClick={() => void handleExportLinks()}>
+              Export to Excel
             </Button>
+            <Button variant="secondary" onClick={() => router.push("/suppliers")}>Back</Button>
             {deletable ? (
               <Button variant="destructive" onClick={() => setConfirmOpen(true)}>
                 Delete
@@ -243,11 +305,7 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
         }
       />
 
-      {error ? (
-        <div className="rounded-md border p-4 text-sm text-destructive">
-          {(error as Error).message}
-        </div>
-      ) : null}
+      {error ? <div className="rounded-md border p-4 text-sm text-destructive">{(error as Error).message}</div> : null}
 
       <Tabs defaultValue="details">
         <TabsList>
@@ -258,30 +316,18 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
         <TabsContent value="details">
           <div className="rounded-md border p-4">
             {isLoading ? (
-              <div className="text-sm text-muted-foreground">Loading…</div>
+              <div className="text-sm text-muted-foreground">Loading...</div>
             ) : (
-              <form
-                className="space-y-4"
-                onSubmit={form.handleSubmit((v) => updateMutation.mutate(v))}
-              >
-                <FormField
-                  label="Company name"
-                  error={form.formState.errors.company_name?.message}
-                >
+              <form className="space-y-4" onSubmit={form.handleSubmit((values) => updateMutation.mutate(values))}>
+                <FormField label="Company name" error={form.formState.errors.company_name?.message}>
                   <Input {...form.register("company_name")} disabled={!writable} />
                 </FormField>
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <FormField
-                    label="Contact name"
-                    error={form.formState.errors.contact_name?.message}
-                  >
+                  <FormField label="Contact name" error={form.formState.errors.contact_name?.message}>
                     <Input {...form.register("contact_name")} disabled={!writable} />
                   </FormField>
-                  <FormField
-                    label="Contact email"
-                    error={form.formState.errors.contact_email?.message}
-                  >
+                  <FormField label="Contact email" error={form.formState.errors.contact_email?.message}>
                     <Input {...form.register("contact_email")} disabled={!writable} />
                   </FormField>
                 </div>
@@ -296,32 +342,16 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <FormField
-                    label="Payment terms"
-                    error={form.formState.errors.payment_terms?.message}
-                  >
+                  <FormField label="Payment terms" error={form.formState.errors.payment_terms?.message}>
                     <Input {...form.register("payment_terms")} disabled={!writable} />
                   </FormField>
-                  <FormField
-                    label="Currency"
-                    error={form.formState.errors.currency?.message}
-                  >
+                  <FormField label="Currency" error={form.formState.errors.currency?.message}>
                     <Input {...form.register("currency")} disabled={!writable} />
                   </FormField>
                 </div>
 
-                <FormField
-                  label="Rating (1–5)"
-                  error={form.formState.errors.rating?.message}
-                >
-                  <Input
-                    type="number"
-                    min={1}
-                    max={5}
-                    step={1}
-                    {...form.register("rating")}
-                    disabled={!writable}
-                  />
+                <FormField label="Rating (1-5)" error={form.formState.errors.rating?.message}>
+                  <Input type="number" min={1} max={5} step={1} {...form.register("rating")} disabled={!writable} />
                 </FormField>
 
                 <FormField label="Notes" error={form.formState.errors.notes?.message}>
@@ -338,7 +368,7 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
                   {writable ? (
                     <Switch
                       checked={form.watch("is_active")}
-                      onCheckedChange={(v) => form.setValue("is_active", v)}
+                      onCheckedChange={(value) => form.setValue("is_active", value)}
                     />
                   ) : (
                     <StatusBadge
@@ -350,9 +380,7 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
 
                 {writable ? (
                   <div className="flex gap-2">
-                    <Button type="submit" disabled={updateMutation.isPending}>
-                      Save
-                    </Button>
+                    <Button type="submit" disabled={updateMutation.isPending}>Save</Button>
                     <Button type="button" variant="secondary" onClick={() => form.reset()}>
                       Reset
                     </Button>
@@ -372,35 +400,33 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
         <TabsContent value="products">
           <div className="space-y-4 rounded-md border p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <div className="flex-1 text-sm text-muted-foreground">
-                Link products this supplier provides.
-              </div>
+              <div className="flex-1 text-sm text-muted-foreground">Link products this supplier provides.</div>
               {writable ? (
                 <div className="flex w-full gap-2 sm:w-auto">
-                  <Select value={addProductId} onValueChange={(v) => setAddProductId(v ?? "")}>
+                  <Select value={addProductId} onValueChange={(value) => setAddProductId(value ?? "")}> 
                     <SelectTrigger className="w-full sm:w-72">
-  <SelectValue placeholder="Select product">
-    {(() => {
-      if (!addProductId) return "Select product";
-      const selected = (productsOptions ?? []).find((p) => p.id === addProductId);
-      return selected ? `${selected.name} (${selected.sku})` : "Select product";
-    })()}
-  </SelectValue>
-</SelectTrigger>
+                      <SelectValue placeholder="Select product">
+                        {(() => {
+                          if (!addProductId) return "Select product";
+                          const selected = (productsOptions ?? []).find((item) => item.id === addProductId);
+                          return selected ? `${selected.name} (${selected.sku})` : "Select product";
+                        })()}
+                      </SelectValue>
+                    </SelectTrigger>
                     <SelectContent>
                       {(productsOptions ?? [])
-                        .filter((p) => !linkedProductIds.has(p.id))
-                        .map((p) => (
-                          <SelectItem key={p.id} value={p.id}>
-                            {p.name} ({p.sku})
+                        .filter((item) => !linkedProductIds.has(item.id))
+                        .map((item) => (
+                          <SelectItem key={item.id} value={item.id}>
+                            {item.name} ({item.sku})
                           </SelectItem>
                         ))}
                     </SelectContent>
                   </Select>
                   <Button
+                    type="button"
                     disabled={!addProductId || addLinkMutation.isPending}
                     onClick={() => addLinkMutation.mutate()}
-                    type="button"
                   >
                     Add
                   </Button>
@@ -420,26 +446,36 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
                     <div>
                       <div className="text-sm font-medium">
                         {link.product?.name ?? "Product"}{" "}
-                        <span className="text-muted-foreground">
-                          ({link.product?.sku})
-                        </span>
+                        <span className="text-muted-foreground">({link.product?.sku})</span>
                       </div>
                       <div className="text-xs text-muted-foreground">
                         Unit cost: {Number(link.unit_cost).toFixed(2)} · Lead time: {link.lead_time_days}d · MOQ: {Number(link.minimum_order_quantity)}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger>
+                          <Button variant="ghost" size="icon">
+                            <MoreHorizontal className="h-4 w-4" aria-hidden />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => void handleExportLinks([link])}>
+                            Export row
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+
                       <Button
                         type="button"
                         variant={link.is_preferred ? "default" : "secondary"}
                         size="sm"
                         disabled={!writable || setPreferredMutation.isPending}
-                        onClick={() =>
-                          setPreferredMutation.mutate({ productId: link.product_id })
-                        }
+                        onClick={() => setPreferredMutation.mutate({ productId: link.product_id })}
                       >
                         {link.is_preferred ? "Preferred" : "Make preferred"}
                       </Button>
+
                       {writable ? (
                         <Button
                           type="button"
@@ -460,9 +496,7 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
             {(addLinkMutation.error || removeLinkMutation.error || setPreferredMutation.error) ? (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
                 {(
-                  (addLinkMutation.error ??
-                    removeLinkMutation.error ??
-                    setPreferredMutation.error) as Error
+                  (addLinkMutation.error ?? removeLinkMutation.error ?? setPreferredMutation.error) as Error
                 ).message}
               </div>
             ) : null}
@@ -482,3 +516,5 @@ export function SupplierDetailPage({ supplierId }: { supplierId: string }) {
     </div>
   );
 }
+
+
