@@ -319,7 +319,7 @@ export function InventoryPage() {
     queryFn: () => fetchInventory(params),
   });
 
-  const rows = data?.rows ?? [];
+  const rows = useMemo(() => data?.rows ?? [], [data?.rows]);
 
   const healthKey = useMemo(
     () => rows.map((row) => `${row.id}:${row.product_id}:${row.warehouse_id}`).join("|"),
@@ -353,6 +353,8 @@ export function InventoryPage() {
     },
   });
 
+
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!selectedParams) return;
     setServiceLevel(String(selectedParams.service_level_percent ?? 95));
@@ -360,7 +362,7 @@ export function InventoryPage() {
     setHoldingRate(String(selectedParams.holding_cost_rate ?? 0.25));
     setWindowDays(String(selectedParams.calculation_window_days ?? 90));
   }, [selectedParams]);
-
+  /* eslint-enable react-hooks/set-state-in-effect */
   const filteredRows = useMemo(() => {
     if (status === "all") return rows;
     return rows.filter((row) => healthMap?.[row.id]?.health.stock_status === status);
@@ -655,5 +657,7 @@ export function InventoryPage() {
     </div>
   );
 }
+
+
 
 

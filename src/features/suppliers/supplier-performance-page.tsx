@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -90,14 +90,8 @@ const supplierChartConfig = {
 export function SupplierPerformancePage() {
   const router = useRouter();
   const now = new Date();
-
   const [periodStart, setPeriodStart] = useState(startOfMonth(now));
-  const [mounted, setMounted] = useState(false);
   const [periodEnd, setPeriodEnd] = useState(endOfMonth(now));
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["supplier_performance", periodStart, periodEnd],
@@ -133,36 +127,26 @@ export function SupplierPerformancePage() {
       <div className="rounded-lg border bg-gradient-to-br from-emerald-50/40 via-blue-50/30 to-amber-50/40 p-4 dark:from-emerald-950/10 dark:via-blue-950/10 dark:to-amber-950/10">
         <div className="mb-3 text-sm font-medium">Supplier metric comparison</div>
         <div className="h-72 w-full">
-          {mounted ? (
-            <ChartContainer config={supplierChartConfig} className="h-72 w-full">
-              <BarChart data={chartData}>
-                <CartesianGrid vertical={false} strokeDasharray="4 4" stroke="hsl(var(--border))" />
-                <XAxis
-                  dataKey="name"
-                  tick={false}
-                  tickLine={false}
-                  axisLine={false}
-                  height={8}
-                />
-                <YAxis domain={[0, 100]} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
-                <Tooltip
-                  formatter={(value, metric) => [`${Number(value ?? 0).toFixed(1)}%`, String(metric)]}
-                  labelFormatter={(label) => `Supplier: ${String(label ?? "-")}`}
-                  contentStyle={{
-                    borderRadius: "0.5rem",
-                    border: "1px solid hsl(var(--border))",
-                    backgroundColor: "hsl(var(--card))",
-                  }}
-                />
-                <Legend />
-                <Bar dataKey="onTime" name="On time %" fill="#16a34a" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="quality" name="Quality %" fill="#2563eb" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="fillRate" name="Fill %" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ChartContainer>
-          ) : (
-            <div className="h-full w-full animate-pulse rounded-md bg-muted/30" />
-          )}
+          <ChartContainer config={supplierChartConfig} className="h-72 w-full">
+            <BarChart data={chartData}>
+              <CartesianGrid vertical={false} strokeDasharray="4 4" stroke="hsl(var(--border))" />
+              <XAxis dataKey="name" tick={false} tickLine={false} axisLine={false} height={8} />
+              <YAxis domain={[0, 100]} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
+              <Tooltip
+                formatter={(value, metric) => [`${Number(value ?? 0).toFixed(1)}%`, String(metric)]}
+                labelFormatter={(label) => `Supplier: ${String(label ?? "-")}`}
+                contentStyle={{
+                  borderRadius: "0.5rem",
+                  border: "1px solid hsl(var(--border))",
+                  backgroundColor: "hsl(var(--card))",
+                }}
+              />
+              <Legend />
+              <Bar dataKey="onTime" name="On time %" fill="#16a34a" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="quality" name="Quality %" fill="#2563eb" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="fillRate" name="Fill %" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ChartContainer>
         </div>
       </div>
 

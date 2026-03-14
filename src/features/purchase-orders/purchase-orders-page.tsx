@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
 import { useFieldArray, useForm } from "react-hook-form";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import { MoreHorizontal } from "lucide-react";
@@ -171,9 +171,6 @@ export function PurchaseOrdersPage() {
   const [fromDate, setFromDate] = useQueryState("from", parseAsString.withDefault(""));
   const [toDate, setToDate] = useQueryState("to", parseAsString.withDefault(""));
   const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1));
-  const [prefillProductId, setPrefillProductId] = useQueryState("prefillProductId", parseAsString.withDefault(""));
-  const [prefillWarehouseId, setPrefillWarehouseId] = useQueryState("prefillWarehouseId", parseAsString.withDefault(""));
-  const [prefillQty, setPrefillQty] = useQueryState("prefillQty", parseAsString.withDefault(""));
 
   const params = { q, supplier, status, from: fromDate, to: toDate, page };
 

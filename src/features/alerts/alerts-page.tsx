@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNowStrict } from "date-fns";
 import { parseAsString, useQueryState } from "nuqs";
@@ -673,5 +673,6 @@ export function AlertsPage() {
     </div>
   );
 }
+
 
 
